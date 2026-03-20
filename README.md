@@ -82,7 +82,28 @@ See real working examples:
 - Prevent infinite loops
 - Validate tool calls
 - Mock agents for isolation
-- Works with LangGraph today, with CrewAI and AutoGen adapters planned
+- Works with LangGraph, CrewAI, and AutoGen
+
+## Framework Support
+
+```python
+# LangGraph
+from synkt import LangGraphInterceptor
+test_graph = LangGraphInterceptor(graph)
+result = test_graph.invoke({"input": "hello"})
+
+# CrewAI
+from synkt import CrewAIInterceptor
+test_crew = CrewAIInterceptor(crew)
+result = test_crew.invoke(inputs={"topic": "AI"})
+assert_handoff("crew", "researcher")
+
+# AutoGen
+from synkt import AutoGenInterceptor
+test_manager = AutoGenInterceptor(manager)
+result = test_manager.invoke("Start conversation")
+assert_handoff("user", "assistant")
+```
 
 ## Mocking Tool Responses
 
