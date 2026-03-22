@@ -35,19 +35,20 @@ export interface GraphCanvasProps {
 }
 
 /**
- * Calculate the point on the border of a rectangle closest to a target point.
+ * Calculate the point on the border of a rectangle closest to a target point,
+ * plus the outward normal direction at that point.
  * This ensures edges connect from the edge of nodes, not the center.
  */
 function getBorderPoint(
   nodeX: number, nodeY: number,
   targetX: number, targetY: number,
-): { x: number; y: number } {
+): { x: number; y: number; nx: number; ny: number } {
   const cx = nodeX + NODE_WIDTH / 2
   const cy = nodeY + NODE_HEIGHT / 2
   const dx = targetX - cx
   const dy = targetY - cy
 
-  if (dx === 0 && dy === 0) return { x: cx, y: cy }
+  if (dx === 0 && dy === 0) return { x: cx, y: cy, nx: 0, ny: -1 }
 
   const halfW = NODE_WIDTH / 2
   const halfH = NODE_HEIGHT / 2
@@ -57,10 +58,18 @@ function getBorderPoint(
   const scaleY = dy !== 0 ? halfH / Math.abs(dy) : Infinity
   const scale = Math.min(scaleX, scaleY)
 
-  return {
-    x: cx + dx * scale,
-    y: cy + dy * scale,
+  const bx = cx + dx * scale
+  const by = cy + dy * scale
+
+  // Determine outward normal based on which side was hit
+  let nx = 0, ny = 0
+  if (scaleX < scaleY) {
+    nx = dx > 0 ? 1 : -1
+  } else {
+    ny = dy > 0 ? 1 : -1
   }
+
+  return { x: bx, y: by, nx, ny }
 }
 
 export const GraphCanvas = memo(function GraphCanvas({
@@ -104,7 +113,7 @@ export const GraphCanvas = memo(function GraphCanvas({
       const sourceNode = nodes.find((n) => n.id === sourceId)
       const targetNode = nodes.find((n) => n.id === targetId)
       if (!sourceNode || !targetNode) {
-        return { sourceX: 0, sourceY: 0, targetX: 0, targetY: 0 }
+        return { sourceX: 0, sourceY: 0, targetX: 0, targetY: 0, sourceNx: 0, sourceNy: 0, targetNx: 0, targetNy: 0 }
       }
 
       const sourceCx = sourceNode.x + NODE_WIDTH / 2
@@ -120,6 +129,10 @@ export const GraphCanvas = memo(function GraphCanvas({
         sourceY: sourcePoint.y,
         targetX: targetPoint.x,
         targetY: targetPoint.y,
+        sourceNx: sourcePoint.nx,
+        sourceNy: sourcePoint.ny,
+        targetNx: targetPoint.nx,
+        targetNy: targetPoint.ny,
       }
     },
     [nodes]
@@ -135,6 +148,7 @@ export const GraphCanvas = memo(function GraphCanvas({
         if (nodeId) {
           const node = nodes.find(n => n.id === nodeId)
           if (node) {
+            e.preventDefault()
             e.stopPropagation()
             setDraggingNodeId(nodeId)
             setNodeDragStart({ x: e.clientX, y: e.clientY })
@@ -147,6 +161,7 @@ export const GraphCanvas = memo(function GraphCanvas({
 
     if (target.closest('[data-node]')) return
     if (target.closest('[data-search]')) return
+    e.preventDefault()
     setIsDragging(true)
     setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
   }, [offset, nodes])
@@ -290,8 +305,8 @@ export const GraphCanvas = memo(function GraphCanvas({
       ref={canvasRef}
       className={cn(
         "relative flex-1 overflow-hidden bg-[#121212] cursor-grab",
-        isDragging && "cursor-grabbing",
-        draggingNodeId && "cursor-grabbing",
+        isDragging && "cursor-grabbing select-none",
+        draggingNodeId && "cursor-grabbing select-none",
         className
       )}
       onMouseDown={handleMouseDown}
@@ -336,6 +351,10 @@ export const GraphCanvas = memo(function GraphCanvas({
                 sourceY={pts.sourceY}
                 targetX={pts.targetX}
                 targetY={pts.targetY}
+                sourceNx={pts.sourceNx}
+                sourceNy={pts.sourceNy}
+                targetNx={pts.targetNx}
+                targetNy={pts.targetNy}
                 status={edge.status}
                 label={edge.label}
                 animateParticles={animateParticles}

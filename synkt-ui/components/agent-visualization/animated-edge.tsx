@@ -11,6 +11,12 @@ export interface AnimatedEdgeProps {
   sourceY: number
   targetX: number
   targetY: number
+  /** Outward normal direction at source border point */
+  sourceNx?: number
+  sourceNy?: number
+  /** Outward normal direction at target border point */
+  targetNx?: number
+  targetNy?: number
   status?: EdgeStatus
   label?: string
   animateParticles?: boolean
@@ -46,6 +52,10 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   sourceY,
   targetX,
   targetY,
+  sourceNx = 0,
+  sourceNy = 0,
+  targetNx = 0,
+  targetNy = 0,
   status = "idle",
   label,
   animateParticles = true,
@@ -59,23 +69,19 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   const dy = targetY - sourceY
   const distance = Math.sqrt(dx * dx + dy * dy)
 
-  // Gentle curvature using a perpendicular offset at control points.
-  // This avoids the flip that happens when switching between horizontal/vertical branching.
-  const curvature = Math.min(40, distance * 0.15)
+  // Control point offset scales with distance — edges flow outward from each node's
+  // border along the normal before curving toward the other node. This ensures edges
+  // that exit the top/bottom at shallow angles still look cleanly attached.
+  const cpOffset = Math.max(30, Math.min(80, distance * 0.35))
 
-  // Perpendicular unit vector (always curves to the same side — "left" of the direction)
-  const nx = distance > 0 ? -dy / distance : 0
-  const ny = distance > 0 ? dx / distance : 0
-
-  // Control points: 1/3 and 2/3 along the line, offset perpendicularly
-  const controlX1 = sourceX + dx * 0.33 + nx * curvature
-  const controlY1 = sourceY + dy * 0.33 + ny * curvature
-  const controlX2 = sourceX + dx * 0.66 + nx * curvature
-  const controlY2 = sourceY + dy * 0.66 + ny * curvature
+  const controlX1 = sourceX + sourceNx * cpOffset
+  const controlY1 = sourceY + sourceNy * cpOffset
+  const controlX2 = targetX + targetNx * cpOffset
+  const controlY2 = targetY + targetNy * cpOffset
 
   const pathD = `M ${sourceX} ${sourceY} C ${controlX1} ${controlY1}, ${controlX2} ${controlY2}, ${targetX} ${targetY}`
 
-  // Arrow direction: angle at target
+  // Arrow direction: angle at target (from last control point into target)
   const arrowAngle = Math.atan2(targetY - controlY2, targetX - controlX2)
   const arrowLen = 10
   const ax1 = targetX - arrowLen * Math.cos(arrowAngle - Math.PI / 6)
