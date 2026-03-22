@@ -5,6 +5,7 @@ from typing import Any
 
 from synkt.interceptors.base import BaseInterceptor
 from synkt.mocking._registry import get_mock_registry
+from synkt.trace.collector import TraceCollector, get_collector, reset_collector
 from synkt.trace.storage import get_current_trace
 
 
@@ -17,10 +18,15 @@ class LangGraphInterceptor(BaseInterceptor):
     - graph.compile().invoke(...): invocation API
     """
 
-    def __init__(self, graph: Any):
+    def __init__(self, graph: Any, *, live: bool = False, server_url: str = "http://localhost:8000"):
         self.graph = graph
         self._original_nodes: dict[str, Callable[..., Any]] = {}
         self._previous_node_name = "start"
+        self._live = live
+        self._collector: TraceCollector | None = None
+        if live:
+            reset_collector()
+            self._collector = get_collector(server_url)
         self._wrap_tools()
         self._wrap_nodes()
 
@@ -85,6 +91,11 @@ class LangGraphInterceptor(BaseInterceptor):
                 content={"state": state},
             )
 
+            # Stream to live UI if enabled
+            if self._collector is not None:
+                self._collector.record_handoff(prev_node, node_name)
+                self._collector.record_agent_start(node_name)
+
             if callable(original_func):
                 result = original_func(state)
             elif hasattr(original_func, "invoke"):
@@ -95,6 +106,10 @@ class LangGraphInterceptor(BaseInterceptor):
                 )
 
             self._previous_node_name = node_name
+
+            # Mark agent complete in live stream
+            if self._collector is not None:
+                self._collector.record_agent_complete(node_name)
 
             return result
 

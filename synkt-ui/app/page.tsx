@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { Header } from "@/components/agent-visualization/header"
 import { GraphCanvas, type GraphNode, type GraphEdge } from "@/components/agent-visualization/graph-canvas"
 import { CostPanel } from "@/components/agent-visualization/cost-panel"
@@ -8,8 +8,10 @@ import { Timeline } from "@/components/agent-visualization/timeline"
 import { DetailsPanel } from "@/components/agent-visualization/details-panel"
 import { type AgentStatus } from "@/components/agent-visualization/agent-node"
 import { type EdgeStatus } from "@/components/agent-visualization/animated-edge"
+import { useTraceStream, type TraceData } from "@/hooks/use-trace-stream"
 
-// Demo data
+// ─── Demo data (fallback when server is not running) ───
+
 const initialNodes: GraphNode[] = [
   { id: "orchestrator", name: "Orchestrator", type: "executor", status: "completed", cost: 0.012, x: 400, y: 50 },
   { id: "researcher", name: "Research Agent", type: "research", status: "active", cost: 0.042, x: 100, y: 200 },
@@ -30,7 +32,6 @@ const initialEdges: GraphEdge[] = [
   { id: "e8", source: "reviewer", target: "writer", status: "idle" },
 ]
 
-// Simulation timeline: what happens at each time step
 const timeline: { time: number; nodeUpdates: Record<string, AgentStatus>; edgeUpdates: Record<string, EdgeStatus> }[] = [
   { time: 0, nodeUpdates: { orchestrator: "active" }, edgeUpdates: {} },
   { time: 0.5, nodeUpdates: { orchestrator: "completed", researcher: "active", analyzer: "active" }, edgeUpdates: { e1: "active", e2: "active" } },
@@ -44,38 +45,106 @@ const timeline: { time: number; nodeUpdates: Record<string, AgentStatus>; edgeUp
   { time: 6.0, nodeUpdates: { publisher: "completed" }, edgeUpdates: {} },
 ]
 
+// ─── Helpers to convert live trace data to graph nodes/edges ───
+
+const agentTypeMap: Record<string, "research" | "writer" | "analyzer" | "executor"> = {
+  research: "research",
+  writer: "writer",
+  analyzer: "analyzer",
+  executor: "executor",
+}
+
+function mapAgentStatus(s: string): AgentStatus {
+  if (s === "complete") return "completed"
+  if (s === "active" || s === "idle" || s === "error") return s
+  return "idle"
+}
+
+function traceToGraph(trace: TraceData): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  // Build nodes from agents, arrange in a grid
+  const agents = trace.agents
+  const cols = Math.max(Math.ceil(Math.sqrt(agents.length)), 2)
+  const nodes: GraphNode[] = agents.map((a, i) => ({
+    id: a.name,
+    name: a.name,
+    type: agentTypeMap[a.type] || "executor",
+    status: mapAgentStatus(a.status),
+    cost: a.cost,
+    x: 100 + (i % cols) * 300,
+    y: 80 + Math.floor(i / cols) * 200,
+  }))
+
+  // Build edges from messages (deduplicate)
+  const edgeSet = new Set<string>()
+  const edges: GraphEdge[] = []
+  for (const msg of trace.messages) {
+    const key = `${msg.from_agent}->${msg.to_agent}`
+    if (edgeSet.has(key)) continue
+    edgeSet.add(key)
+
+    // Determine edge status
+    let status: EdgeStatus = "active"
+    if (trace.loop_detected && trace.loop_agents.includes(msg.from_agent) && trace.loop_agents.includes(msg.to_agent)) {
+      status = "loop"
+    }
+
+    edges.push({
+      id: `e-${edges.length}`,
+      source: msg.from_agent,
+      target: msg.to_agent,
+      status,
+    })
+  }
+
+  return { nodes, edges }
+}
+
+// ─── Dashboard ───
+
 export default function AgentVisualizationDashboard() {
-  const [nodes, setNodes] = useState<GraphNode[]>(initialNodes)
-  const [edges, setEdges] = useState<GraphEdge[]>(initialEdges)
+  const { traceData, connected, error: streamError } = useTraceStream()
+  const isLive = connected && traceData !== null
+
+  // Demo mode state
+  const [demoNodes, setDemoNodes] = useState<GraphNode[]>(initialNodes)
+  const [demoEdges, setDemoEdges] = useState<GraphEdge[]>(initialEdges)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [isPanelOpen, setIsPanelOpen] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
   const duration = 6.0
-  
-  // Track if panel is in transition to prevent instant open
+
   const panelMountedRef = useRef(false)
+
+  // Compute live graph from trace data
+  const liveGraph = useMemo(() => {
+    if (!traceData) return null
+    return traceToGraph(traceData)
+  }, [traceData])
+
+  // Active nodes/edges: live or demo
+  const nodes = isLive && liveGraph ? liveGraph.nodes : demoNodes
+  const edges = isLive && liveGraph ? liveGraph.edges : demoEdges
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) || null : null
 
-  // Calculate totals
-  const totalCost = nodes.reduce((sum, n) => sum + n.cost, 0)
-  const totalTokens = Math.round(totalCost * 1000) // Simulated
-  const latency = currentTime
+  const totalCost = isLive && traceData ? traceData.total_cost : nodes.reduce((sum, n) => sum + n.cost, 0)
+  const totalTokens = isLive && traceData ? traceData.total_tokens : Math.round(totalCost * 1000)
+  const latency = isLive && traceData ? traceData.latency_ms / 1000 : currentTime
 
-  // Apply timeline updates based on current time
+  // Demo timeline updates
   useEffect(() => {
+    if (isLive) return
     const applicableUpdates = timeline.filter((t) => t.time <= currentTime)
-    
-    setNodes((prev) => {
+
+    setDemoNodes((prev) => {
       const updated = [...prev]
       applicableUpdates.forEach((update) => {
         Object.entries(update.nodeUpdates).forEach(([nodeId, status]) => {
           const idx = updated.findIndex((n) => n.id === nodeId)
           if (idx !== -1) {
             updated[idx] = { ...updated[idx], status }
-            // Simulate cost increase for active/completed nodes
             if (status === "active" || status === "completed") {
               const baseCost = initialNodes.find((n) => n.id === nodeId)?.cost || 0
               updated[idx].cost = baseCost > 0 ? baseCost : Math.random() * 0.05
@@ -86,7 +155,7 @@ export default function AgentVisualizationDashboard() {
       return updated
     })
 
-    setEdges((prev) => {
+    setDemoEdges((prev) => {
       const updated = [...prev]
       applicableUpdates.forEach((update) => {
         Object.entries(update.edgeUpdates).forEach(([edgeId, status]) => {
@@ -98,11 +167,11 @@ export default function AgentVisualizationDashboard() {
       })
       return updated
     })
-  }, [currentTime])
+  }, [currentTime, isLive])
 
-  // Playback loop
+  // Playback loop (demo mode)
   useEffect(() => {
-    if (!isPlaying) return
+    if (!isPlaying || isLive) return
 
     const interval = setInterval(() => {
       setCurrentTime((prev) => {
@@ -116,17 +185,14 @@ export default function AgentVisualizationDashboard() {
     }, 100)
 
     return () => clearInterval(interval)
-  }, [isPlaying, speed])
+  }, [isPlaying, speed, isLive])
 
-  // Mark panel as mounted after first render
   useEffect(() => {
     panelMountedRef.current = true
   }, [])
 
   const handleNodeSelect = useCallback((nodeId: string) => {
-    // Set selected node first
     setSelectedNodeId(nodeId)
-    // Then open panel with a slight delay to ensure CSS transition triggers
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         setIsPanelOpen(true)
@@ -136,7 +202,6 @@ export default function AgentVisualizationDashboard() {
 
   const handlePanelClose = useCallback(() => {
     setIsPanelOpen(false)
-    // Clear selection after transition completes
     setTimeout(() => setSelectedNodeId(null), 300)
   }, [])
 
@@ -155,22 +220,31 @@ export default function AgentVisualizationDashboard() {
   const handleRefresh = useCallback(() => {
     setCurrentTime(0)
     setIsPlaying(false)
-    setNodes(initialNodes)
-    setEdges(initialEdges)
+    setDemoNodes(initialNodes)
+    setDemoEdges(initialEdges)
   }, [])
 
   const handleNodesChange = useCallback((updatedNodes: GraphNode[]) => {
-    setNodes(updatedNodes)
-  }, [])
+    if (!isLive) {
+      setDemoNodes(updatedNodes)
+    }
+  }, [isLive])
 
   return (
     <div className="flex h-screen flex-col bg-[#121212]">
       {/* Header */}
       <Header
-        title="Agent Workflow"
-        isConnected={true}
+        title={isLive ? "Agent Workflow (Live)" : "Agent Workflow (Demo)"}
+        isConnected={connected}
         onRefresh={handleRefresh}
       />
+
+      {/* Loop detection banner */}
+      {traceData?.loop_detected && (
+        <div className="bg-red-900/80 border-b border-red-700 px-4 py-2 text-center text-sm text-red-200">
+          Loop detected between agents: {traceData.loop_agents.join(" → ")}
+        </div>
+      )}
 
       {/* Main content */}
       <div className="relative flex-1 flex flex-col">
@@ -192,7 +266,7 @@ export default function AgentVisualizationDashboard() {
           />
         </div>
 
-        {/* Details panel - always rendered, visibility controlled by isOpen */}
+        {/* Details panel */}
         <DetailsPanel
           agent={selectedNode}
           isOpen={isPanelOpen}
@@ -200,16 +274,18 @@ export default function AgentVisualizationDashboard() {
         />
       </div>
 
-      {/* Timeline */}
-      <Timeline
-        currentTime={currentTime}
-        duration={duration}
-        isPlaying={isPlaying}
-        speed={speed}
-        onTimeChange={handleTimeChange}
-        onPlayPause={handlePlayPause}
-        onSpeedChange={setSpeed}
-      />
+      {/* Timeline (demo mode only, hidden when live) */}
+      {!isLive && (
+        <Timeline
+          currentTime={currentTime}
+          duration={duration}
+          isPlaying={isPlaying}
+          speed={speed}
+          onTimeChange={handleTimeChange}
+          onPlayPause={handlePlayPause}
+          onSpeedChange={setSpeed}
+        />
+      )}
     </div>
   )
 }

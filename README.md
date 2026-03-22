@@ -1,117 +1,89 @@
 # synkt
 
-A small testing framework for multi-agent systems.
+**pytest for multi-agent systems.**
+Test agent handoffs, prevent infinite loops, and catch coordination bugs before deployment.
 
-```python
-from synkt import assert_handoff, assert_no_loop
-from synkt.interceptors.langgraph import LangGraphInterceptor
+## The Problem
 
-from examples.customer_service.system import build_customer_service_graph
+**73% of multi-agent AI systems fail in production.** A single undetected infinite loop between two agents can burn through thousands of dollars in API costs before anyone notices.
 
-
-def test_refund_flow():
-    graph = build_customer_service_graph()
-    test_graph = LangGraphInterceptor(graph)
-
-    result = test_graph.invoke({"input": "refund for order #12345"})
-
-    assert_handoff("triage", "refunds")
-    assert_no_loop(max_iterations=5)
-    assert "12345" in result["resolution"]
-```
-
-## Why synkt?
-
-Most eval tools check final output quality. That is useful, but multi-agent bugs usually happen in the middle:
-
-- Agent A hands off to the wrong agent
-- A tool gets called with the wrong payload
-- A flow starts looping and burns tokens
-- Parallel steps stop being parallel after a refactor
-
-`synkt` is for testing those coordination paths directly.
-
-## Installation
-
-```bash
-pip install synkt
-```
-
-For local development in this repo:
-
-```bash
-pip install -e .
-pip install -e ".[dev,langgraph]"
-```
+Current tools like LangSmith show you what happened. **synkt prevents it from happening.**
 
 ## Quick Start
 
-1. Build your agent graph/system as normal.
-2. Wrap it with an interceptor (for now: LangGraph).
-3. Run it in a test.
-4. Assert on handoffs, loops, tools, and cost.
+```bash
+pip install synkt
+
+# Run tests
+pytest tests/ -v
+
+# Watch live visualization
+python -m synkt.server   # starts on http://localhost:8000
+cd synkt-ui && npm run dev  # dashboard on http://localhost:3000
+```
+
+## Works With
+
+- LangGraph
+- CrewAI
+- AutoGen
+
+## What Makes synkt Different
+
+| Feature | synkt | LangSmith | Braintrust |
+|---------|-------|-----------|------------|
+| Tests coordination | Yes | No | No |
+| Detects infinite loops | Yes | No | No |
+| Real-time graph viz | Yes | No | No |
+| 100% open-source | Yes | No | No |
+| Free forever | Yes | 5K traces | 1M spans |
+
+## Usage
+
+### Test Agent Handoffs
 
 ```python
 from synkt import assert_handoff, assert_no_loop
 from synkt.interceptors.langgraph import LangGraphInterceptor
 
+def test_refund_flow():
+    graph = build_customer_service_graph()
+    traced = LangGraphInterceptor(graph)
 
-def test_my_flow():
-    graph = build_graph()
-    tested = LangGraphInterceptor(graph)
-
-    tested.invoke({"input": "help me with my refund"})
+    traced.invoke({"input": "refund for order #12345"})
 
     assert_handoff("triage", "refunds")
     assert_no_loop(max_iterations=5)
 ```
 
-## Examples
-
-See real working examples:
-- [Customer Service](examples/customer_service/) - Sequential agent flow
-- [Research Crew](examples/research_crew/) - Parallel agent execution
-
-## Documentation
-
-- Design doc: [docs/DESIGN.md](docs/DESIGN.md)
-
-## Features
-
-- Test agent handoffs
-- Prevent infinite loops
-- Validate tool calls
-- Mock agents for isolation
-- Works with LangGraph, CrewAI, and AutoGen
-
-## Framework Support
+### Detect Infinite Loops
 
 ```python
-# LangGraph
-from synkt import LangGraphInterceptor
-test_graph = LangGraphInterceptor(graph)
-result = test_graph.invoke({"input": "hello"})
+def test_detects_infinite_loop():
+    graph = build_looping_graph()
+    traced = LangGraphInterceptor(graph)
 
-# CrewAI
-from synkt import CrewAIInterceptor
-test_crew = CrewAIInterceptor(crew)
-result = test_crew.invoke(inputs={"topic": "AI"})
-assert_handoff("crew", "researcher")
+    traced.invoke({"messages": []})
 
-# AutoGen
-from synkt import AutoGenInterceptor
-test_manager = AutoGenInterceptor(manager)
-result = test_manager.invoke("Start conversation")
-assert_handoff("user", "assistant")
+    # Catches the loop — this is the point!
+    with pytest.raises(AssertionError, match="Possible infinite loop"):
+        assert_no_loop(max_iterations=2)
 ```
 
-## Mocking Tool Responses
+### Live Visualization
 
-Test agent workflows without calling real external APIs:
+Stream test execution to the real-time dashboard:
+
+```python
+# Enable live streaming to the UI
+traced = LangGraphInterceptor(graph, live=True)
+traced.invoke({"messages": []})
+```
+
+### Mock Tool Responses
 
 ```python
 from synkt import mock_tool
-
 
 def test_weather_agent():
     with mock_tool("get_weather", return_value="sunny and 72F"):
@@ -119,21 +91,55 @@ def test_weather_agent():
         assert "sunny" in result
 ```
 
-Mock with conditional logic:
+### Framework Support
 
 ```python
-from synkt import mock_tool
+# LangGraph
+from synkt import LangGraphInterceptor
+traced = LangGraphInterceptor(graph)
+result = traced.invoke({"input": "hello"})
 
+# CrewAI
+from synkt import CrewAIInterceptor
+traced = CrewAIInterceptor(crew)
+result = traced.invoke(inputs={"topic": "AI"})
 
-def mock_refund(order_id: str, amount: float) -> dict[str, str]:
-    if amount > 100:
-        return {"status": "requires_approval"}
-    return {"status": "approved"}
+# AutoGen
+from synkt import AutoGenInterceptor
+traced = AutoGenInterceptor(manager)
+result = traced.invoke("Start conversation")
+```
 
+## Examples
 
-with mock_tool("process_refund", side_effect=mock_refund):
-    result = agent.invoke({"amount": 150})
-    assert "requires_approval" in result
+- [Customer Service](examples/customer_service/) — Sequential agent flow
+- [Research Crew](examples/research_crew/) — Parallel agent execution
+- [Infinite Loop Detection](examples/infinite_loop_demo/) — Catching coordination bugs
+
+## Architecture
+
+```
+synkt/                  # Python testing framework
+├── assertions/         # assert_handoff, assert_no_loop, assert_cost_under
+├── interceptors/       # LangGraph, CrewAI, AutoGen wrappers
+├── mocking/            # mock_tool, mock_agent
+├── trace/              # AgentTrace, collector, storage
+└── server.py           # FastAPI + SSE for live streaming
+
+synkt-ui/               # Next.js real-time dashboard
+├── app/                # Dashboard page
+├── components/         # Graph canvas, timeline, cost panel
+└── hooks/              # useTraceStream (SSE client)
+```
+
+## Installation (Development)
+
+```bash
+# Python backend
+pip install -e ".[dev,langgraph,server]"
+
+# UI dashboard
+cd synkt-ui && npm install
 ```
 
 ## Contributing
@@ -144,8 +150,6 @@ PRs are welcome. A good starting point:
 2. Keep error messages specific and useful.
 3. Keep APIs typed and easy to read.
 
-Run locally before opening a PR:
-
 ```bash
 pytest -q
 ```
@@ -153,4 +157,3 @@ pytest -q
 ## License
 
 MIT
-

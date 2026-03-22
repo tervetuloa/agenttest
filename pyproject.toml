@@ -21,6 +21,12 @@ dev = [
 langgraph = [
   "langgraph>=0.2",
 ]
+server = [
+  "fastapi>=0.104.0",
+  "uvicorn[standard]>=0.24.0",
+  "sse-starlette>=1.8.2",
+  "httpx>=0.25.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
