@@ -167,25 +167,22 @@ export const DetailsPanel = memo(function DetailsPanel({
           </div>
 
           {/* Connections - show who this agent talks to */}
-          {agentMessages.length > 0 && (
-            <div>
-              <h3 className="text-[13px] font-medium text-white/60 mb-3">Connections</h3>
-              <div className="space-y-2">
-                {/* Deduplicate connections */}
-                {Array.from(
-                  new Set(
-                    agentMessages.map((m) =>
-                      m.from_agent === activeAgent.id ? m.to_agent : m.from_agent
-                    )
-                  )
-                ).map((peer) => {
-                  const outgoing = agentMessages.filter(
-                    (m) => m.from_agent === activeAgent.id && m.to_agent === peer
-                  ).length
-                  const incoming = agentMessages.filter(
-                    (m) => m.from_agent === peer && m.to_agent === activeAgent.id
-                  ).length
-                  return (
+          {agentMessages.length > 0 && (() => {
+            // Precompute peer counts in a single pass
+            const peerCounts = new Map<string, { outgoing: number; incoming: number }>()
+            for (const m of agentMessages) {
+              const peer = m.from_agent === activeAgent.id ? m.to_agent : m.from_agent
+              const counts = peerCounts.get(peer) ?? { outgoing: 0, incoming: 0 }
+              if (m.from_agent === activeAgent.id) counts.outgoing++
+              else counts.incoming++
+              peerCounts.set(peer, counts)
+            }
+
+            return (
+              <div>
+                <h3 className="text-[13px] font-medium text-white/60 mb-3">Connections</h3>
+                <div className="space-y-2">
+                  {Array.from(peerCounts.entries()).map(([peer, { outgoing, incoming }]) => (
                     <div
                       key={peer}
                       className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2"
@@ -199,11 +196,11 @@ export const DetailsPanel = memo(function DetailsPanel({
                         {incoming > 0 && <span>{incoming} recv</span>}
                       </div>
                     </div>
-                  )
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )
+          })()}
 
           {/* Activity Log */}
           <div>

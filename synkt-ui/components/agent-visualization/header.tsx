@@ -1,7 +1,7 @@
 "use client"
 
 import { memo } from "react"
-import { Activity, Settings, RefreshCw, Layout, Download, Search } from "lucide-react"
+import { Activity, Settings, RefreshCw, Layout, Download } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { GlassButton } from "./glass-button"
 

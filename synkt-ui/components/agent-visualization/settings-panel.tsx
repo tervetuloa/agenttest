@@ -123,6 +123,8 @@ function ToggleRow({
         <p className="text-[12px] text-white/40">{description}</p>
       </div>
       <button
+        role="switch"
+        aria-checked={checked}
         onClick={onChange}
         className={cn(
           "relative h-6 w-11 rounded-full transition-colors",

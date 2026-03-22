@@ -210,6 +210,7 @@ export default function AgentVisualizationDashboard() {
   const [liveReplayIndex, setLiveReplayIndex] = useState(0)
 
   const panelMountedRef = useRef(false)
+  const liveReplayIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Compute live graph from trace data (or replay snapshot)
   const activeTraceData = isLiveReplay && traceHistory.length > 0
@@ -293,6 +294,11 @@ export default function AgentVisualizationDashboard() {
 
   useEffect(() => {
     panelMountedRef.current = true
+    return () => {
+      if (liveReplayIntervalRef.current) {
+        clearInterval(liveReplayIntervalRef.current)
+      }
+    }
   }, [])
 
   const handleNodeSelect = useCallback((nodeId: string) => {
@@ -311,16 +317,25 @@ export default function AgentVisualizationDashboard() {
 
   const handlePlayPause = useCallback(() => {
     if (isLive && traceHistory.length > 0) {
+      // Clear any existing replay interval
+      if (liveReplayIntervalRef.current) {
+        clearInterval(liveReplayIntervalRef.current)
+        liveReplayIntervalRef.current = null
+      }
+
       // Live replay mode
       if (liveReplayIndex >= traceHistory.length - 1) {
         setLiveReplayIndex(0)
       }
       setIsLiveReplay(true)
       // Auto-advance replay
-      const interval = setInterval(() => {
+      liveReplayIntervalRef.current = setInterval(() => {
         setLiveReplayIndex((prev) => {
           if (prev >= traceHistory.length - 1) {
-            clearInterval(interval)
+            if (liveReplayIntervalRef.current) {
+              clearInterval(liveReplayIntervalRef.current)
+              liveReplayIntervalRef.current = null
+            }
             setIsLiveReplay(false)
             return traceHistory.length - 1
           }
@@ -338,7 +353,9 @@ export default function AgentVisualizationDashboard() {
 
   const handleTimeChange = useCallback((time: number) => {
     if (isLive && traceHistory.length > 0) {
-      const idx = Math.round((time / liveDuration) * (traceHistory.length - 1))
+      const idx = liveDuration > 0
+        ? Math.round((time / liveDuration) * (traceHistory.length - 1))
+        : 0
       setLiveReplayIndex(Math.max(0, Math.min(idx, traceHistory.length - 1)))
       setIsLiveReplay(true)
       return
@@ -363,6 +380,11 @@ export default function AgentVisualizationDashboard() {
   }, [isLive])
 
   const handleLayoutToggle = useCallback(() => {
+    if (isLive) {
+      addToast("Layout changes disabled during live mode", "warning")
+      return
+    }
+
     const modes: LayoutMode[] = ["freeform", "hierarchical", "radial"]
     const nextIdx = (modes.indexOf(layoutMode) + 1) % modes.length
     const nextMode = modes[nextIdx]
@@ -370,12 +392,10 @@ export default function AgentVisualizationDashboard() {
     addToast(`Layout: ${nextMode}`, "info")
 
     if (nextMode !== "freeform") {
-      const arranged = applyLayout(isLive ? nodes : demoNodes, nextMode)
-      if (!isLive) {
-        setDemoNodes(arranged)
-      }
+      const arranged = applyLayout(demoNodes, nextMode)
+      setDemoNodes(arranged)
     }
-  }, [layoutMode, isLive, nodes, demoNodes, addToast])
+  }, [layoutMode, isLive, demoNodes, addToast])
 
   const handleExport = useCallback(() => {
     const exportData = {
@@ -424,6 +444,8 @@ export default function AgentVisualizationDashboard() {
           selectedNodeId={selectedNodeId}
           onNodeSelect={handleNodeSelect}
           onNodesChange={handleNodesChange}
+          showMinimap={settings.showMinimap}
+          animateParticles={settings.animateParticles}
         />
 
         {/* Floating cost panel */}

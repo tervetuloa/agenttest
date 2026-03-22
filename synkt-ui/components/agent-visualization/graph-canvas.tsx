@@ -29,6 +29,8 @@ export interface GraphCanvasProps {
   selectedNodeId: string | null
   onNodeSelect: (nodeId: string) => void
   onNodesChange?: (nodes: GraphNode[]) => void
+  showMinimap?: boolean
+  animateParticles?: boolean
   className?: string
 }
 
@@ -67,6 +69,8 @@ export const GraphCanvas = memo(function GraphCanvas({
   selectedNodeId,
   onNodeSelect,
   onNodesChange,
+  showMinimap = true,
+  animateParticles = true,
   className,
 }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -334,6 +338,7 @@ export const GraphCanvas = memo(function GraphCanvas({
                 targetY={pts.targetY}
                 status={edge.status}
                 label={edge.label}
+                animateParticles={animateParticles}
               />
             )
           })}
@@ -398,7 +403,7 @@ export const GraphCanvas = memo(function GraphCanvas({
       )}
 
       {/* Minimap */}
-      {nodes.length > 2 && (
+      {showMinimap && nodes.length > 2 && (
         <div className="absolute bottom-4 right-4 rounded-xl border border-white/10 bg-[rgba(26,26,26,0.9)] backdrop-blur-xl p-2 shadow-lg">
           <svg width={minimapSize.w} height={minimapSize.h} className="block">
             {/* Edges */}

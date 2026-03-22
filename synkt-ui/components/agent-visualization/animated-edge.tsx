@@ -13,6 +13,7 @@ export interface AnimatedEdgeProps {
   targetY: number
   status?: EdgeStatus
   label?: string
+  animateParticles?: boolean
   className?: string
 }
 
@@ -47,6 +48,7 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   targetY,
   status = "idle",
   label,
+  animateParticles = true,
   className,
 }: AnimatedEdgeProps) {
   const uniqueId = useId()
@@ -94,7 +96,6 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   // Arrow direction: angle at target
   const arrowAngle = Math.atan2(targetY - controlY2, targetX - controlX2)
   const arrowLen = 10
-  const arrowWidth = 4
   const ax1 = targetX - arrowLen * Math.cos(arrowAngle - Math.PI / 6)
   const ay1 = targetY - arrowLen * Math.sin(arrowAngle - Math.PI / 6)
   const ax2 = targetX - arrowLen * Math.cos(arrowAngle + Math.PI / 6)
@@ -164,7 +165,7 @@ export const AnimatedEdge = memo(function AnimatedEdge({
       )}
 
       {/* Animated particles for active/loop states */}
-      {(status === "active" || status === "loop") && (
+      {animateParticles && (status === "active" || status === "loop") && (
         <>
           {[0, 0.33, 0.66].map((offset, i) => (
             <circle
