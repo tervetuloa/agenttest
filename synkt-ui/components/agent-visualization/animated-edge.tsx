@@ -9,13 +9,14 @@ export interface AnimatedEdgeProps {
   id: string
   sourceX: number
   sourceY: number
+  /** Outward normal at source border */
+  sourceNx?: number
+  sourceNy?: number
   targetX: number
   targetY: number
   /** Outward normal at target border — used for arrow direction */
   targetNx?: number
   targetNy?: number
-  /** Orthogonal waypoints (H/V turn points) computed upstream */
-  waypoints?: { x: number; y: number }[]
   status?: EdgeStatus
   label?: string
   animateParticles?: boolean
@@ -49,52 +50,16 @@ const statusStyles = {
 const PARTICLE_SPEED = 120
 const PARTICLE_COUNT = 3
 
-/** Build a path through points with smooth quadratic-bezier rounded corners.
- *  All segments are horizontal or vertical; corners get a smooth 90° arc. */
-function buildRoundedPath(points: { x: number; y: number }[], radius: number): string {
-  if (points.length < 2) return ""
-  if (points.length === 2) {
-    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`
-  }
-
-  let d = `M ${points[0].x} ${points[0].y}`
-
-  for (let i = 1; i < points.length - 1; i++) {
-    const prev = points[i - 1]
-    const curr = points[i]
-    const next = points[i + 1]
-
-    const d1x = curr.x - prev.x
-    const d1y = curr.y - prev.y
-    const d1len = Math.sqrt(d1x * d1x + d1y * d1y) || 1
-    const d2x = next.x - curr.x
-    const d2y = next.y - curr.y
-    const d2len = Math.sqrt(d2x * d2x + d2y * d2y) || 1
-
-    const r = Math.min(radius, d1len * 0.4, d2len * 0.4)
-
-    const ax = curr.x - (d1x / d1len) * r
-    const ay = curr.y - (d1y / d1len) * r
-    const ex = curr.x + (d2x / d2len) * r
-    const ey = curr.y + (d2y / d2len) * r
-
-    d += ` L ${ax} ${ay} Q ${curr.x} ${curr.y} ${ex} ${ey}`
-  }
-
-  const last = points[points.length - 1]
-  d += ` L ${last.x} ${last.y}`
-  return d
-}
-
 export const AnimatedEdge = memo(function AnimatedEdge({
   id,
   sourceX,
   sourceY,
+  sourceNx = 0,
+  sourceNy = 1,
   targetX,
   targetY,
   targetNx = 0,
   targetNy = -1,
-  waypoints = [],
   status = "idle",
   label,
   animateParticles = true,
@@ -108,6 +73,10 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   const pathRef = useRef<SVGPathElement>(null)
   const particleRefs = useRef<(SVGCircleElement | null)[]>([])
   const rafRef = useRef<number>(0)
+  const progressRef = useRef<number[]>(
+    Array.from({ length: PARTICLE_COUNT }, (_, i) => i / PARTICLE_COUNT)
+  )
+  const lastTimeRef = useRef<number>(0)
 
   const dx = targetX - sourceX
   const dy = targetY - sourceY
@@ -123,13 +92,16 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   const endX = targetX + targetNx * arrowLen
   const endY = targetY + targetNy * arrowLen
 
-  // Build orthogonal path through waypoints with rounded corners
-  const allPoints = [
-    { x: sourceX, y: sourceY },
-    ...waypoints,
-    { x: endX, y: endY },
-  ]
-  const pathD = buildRoundedPath(allPoints, 20)
+  // Cubic bezier control point offset — proportional to distance, clamped
+  const controlOffset = Math.max(30, Math.min(200, distance * 0.4))
+
+  // Control points extend outward from each border along the normal
+  const cx1 = sourceX + sourceNx * controlOffset
+  const cy1 = sourceY + sourceNy * controlOffset
+  const cx2 = endX + targetNx * controlOffset
+  const cy2 = endY + targetNy * controlOffset
+
+  const pathD = `M ${sourceX} ${sourceY} C ${cx1} ${cy1} ${cx2} ${cy2} ${endX} ${endY}`
 
   // Arrow polygon
   const ax1 = targetX - arrowLen * Math.cos(arrowAngle - Math.PI / 6)
@@ -137,16 +109,9 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   const ax2 = targetX - arrowLen * Math.cos(arrowAngle + Math.PI / 6)
   const ay2 = targetY - arrowLen * Math.sin(arrowAngle + Math.PI / 6)
 
-  // Label at midpoint of the path
-  let labelX: number, labelY: number
-  if (waypoints.length > 0) {
-    const mid = waypoints[Math.floor(waypoints.length / 2)]
-    labelX = mid.x
-    labelY = mid.y - 16
-  } else {
-    labelX = (sourceX + endX) / 2
-    labelY = (sourceY + endY) / 2 - 16
-  }
+  // Label at bezier midpoint (t=0.5): 0.125*P0 + 0.375*C1 + 0.375*C2 + 0.125*P3
+  const labelX = 0.125 * sourceX + 0.375 * cx1 + 0.375 * cx2 + 0.125 * endX
+  const labelY = 0.125 * sourceY + 0.375 * cy1 + 0.375 * cy2 + 0.125 * endY - 16
 
   const glowFilter = glowFilterId ? `url(#${glowFilterId})` : undefined
   const showParticles = animateParticles && (status === "active" || status === "loop")
@@ -155,28 +120,46 @@ export const AnimatedEdge = memo(function AnimatedEdge({
     particleRefs.current[i] = el
   }, [])
 
+  // Stable particle animation: tracks progress (0–1) per particle,
+  // increments by constant pixel speed each frame. When the path changes
+  // (e.g. node dragging), progress stays stable — no jumps.
   useEffect(() => {
     if (!showParticles) return
+
+    progressRef.current = Array.from({ length: PARTICLE_COUNT }, (_, i) => i / PARTICLE_COUNT)
+    lastTimeRef.current = 0
+
     const animate = (timestamp: number) => {
       const pathEl = pathRef.current
       if (!pathEl) { rafRef.current = requestAnimationFrame(animate); return }
+
       const totalLength = pathEl.getTotalLength()
-      const durationMs = (totalLength / PARTICLE_SPEED) * 1000
-      if (durationMs <= 0) { rafRef.current = requestAnimationFrame(animate); return }
+      if (totalLength <= 0) { rafRef.current = requestAnimationFrame(animate); return }
+
+      const deltaMs = lastTimeRef.current ? Math.min(timestamp - lastTimeRef.current, 50) : 16
+      lastTimeRef.current = timestamp
+
+      const progressIncrement = (PARTICLE_SPEED * deltaMs / 1000) / totalLength
+
       for (let i = 0; i < PARTICLE_COUNT; i++) {
         const circle = particleRefs.current[i]
         if (!circle) continue
-        const t = ((timestamp / durationMs + i / PARTICLE_COUNT) % 1)
+
+        progressRef.current[i] = (progressRef.current[i] + progressIncrement) % 1
+        const t = progressRef.current[i]
         const point = pathEl.getPointAtLength(t * totalLength)
         circle.setAttribute("cx", String(point.x))
         circle.setAttribute("cy", String(point.y))
+
         const opacity = t < 0.1 ? t / 0.1 : t > 0.9 ? (1 - t) / 0.1 : 1
         circle.setAttribute("opacity", String(opacity))
       }
+
       rafRef.current = requestAnimationFrame(animate)
     }
+
     rafRef.current = requestAnimationFrame(animate)
-    return () => cancelAnimationFrame(rafRef.current)
+    return () => { cancelAnimationFrame(rafRef.current); lastTimeRef.current = 0 }
   }, [showParticles])
 
   return (
