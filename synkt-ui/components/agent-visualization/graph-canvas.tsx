@@ -142,38 +142,37 @@ export const GraphCanvas = memo(function GraphCanvas({
     return offsets
   }, [edges])
 
-  // Compute avoidance offsets — push edge curves away from intermediate nodes
-  // that would otherwise be intersected. Computes the exact perpendicular
-  // extent of each blocking node at the edge angle and the minimum control-
-  // point deflection needed to clear it (accounting for bezier attenuation).
-  const edgeAvoidance = useMemo(() => {
-    const avoidances = new Map<string, number>()
+  // Compute waypoints for edges that would pass through other nodes.
+  // For each blocking node, pick the nearest clear corner as a waypoint
+  // so the edge routes around the obstruction with straight segments and
+  // smooth rounded corners.
+  const edgeWaypoints = useMemo(() => {
+    const waypointsMap = new Map<string, { x: number; y: number }[]>()
     const halfW = NODE_WIDTH / 2
     const halfH = NODE_HEIGHT / 2
+    const margin = 30
 
     for (const edge of edges) {
       const srcNode = nodes.find((n) => n.id === edge.source)
       const tgtNode = nodes.find((n) => n.id === edge.target)
-      if (!srcNode || !tgtNode) { avoidances.set(edge.id, 0); continue }
+      if (!srcNode || !tgtNode) { waypointsMap.set(edge.id, []); continue }
 
       const sx = srcNode.x + halfW
       const sy = srcNode.y + halfH
-      const ex = tgtNode.x + halfW
-      const ey = tgtNode.y + halfH
-      const eDx = ex - sx
-      const eDy = ey - sy
+      const tx = tgtNode.x + halfW
+      const ty = tgtNode.y + halfH
+      const eDx = tx - sx
+      const eDy = ty - sy
       const eLen = Math.sqrt(eDx * eDx + eDy * eDy)
-      if (eLen < 1) { avoidances.set(edge.id, 0); continue }
+      if (eLen < 1) { waypointsMap.set(edge.id, []); continue }
 
       const ux = eDx / eLen
       const uy = eDy / eLen
+      const midX = (sx + tx) / 2
+      const midY = (sy + ty) / 2
 
-      // Perpendicular half-extent of the rectangle at this edge angle
-      // (Minkowski sum projection)
-      const perpExtent = halfW * Math.abs(uy) + halfH * Math.abs(ux)
-      const padding = 20
+      const wps: { x: number; y: number; along: number }[] = []
 
-      let bestPush = 0
       for (const node of nodes) {
         if (node.id === edge.source || node.id === edge.target) continue
         const ncx = node.x + halfW
@@ -183,27 +182,52 @@ export const GraphCanvas = memo(function GraphCanvas({
         const along = rx * ux + ry * uy
         const perp = rx * (-uy) + ry * ux
 
-        // Node must project between source and target (with tolerance)
-        if (along < -halfW || along > eLen + halfW) continue
+        // Node must project between source and target
+        const alongExtent = halfW * Math.abs(ux) + halfH * Math.abs(uy)
+        if (along + alongExtent < 0 || along - alongExtent > eLen) continue
 
-        const absPerp = Math.abs(perp)
-        const clearance = perpExtent + padding
-        if (absPerp >= clearance) continue
+        // Check if node blocks the edge line
+        const perpExtent = halfW * Math.abs(uy) + halfH * Math.abs(ux)
+        if (Math.abs(perp) >= perpExtent + 20) continue
 
-        // Exact push needed: curve midpoint deflects ~75% of control-point
-        // offset, so we need cp_offset = gap / 0.75
-        const gap = clearance - absPerp + padding
-        const neededPush = gap / 0.75
-        const pushDir = perp >= 0 ? -1 : 1
+        // Node blocks — pick the nearest clear corner as waypoint.
+        // "Clear side" is opposite to the node center relative to the edge line.
+        const clearSide = perp > 0 ? -1 : 1
 
-        // Keep the largest needed push (sign-aware — pick dominant side)
-        if (Math.abs(neededPush) > Math.abs(bestPush)) {
-          bestPush = pushDir * neededPush
+        const corners = [
+          { x: node.x - margin, y: node.y - margin },
+          { x: node.x + NODE_WIDTH + margin, y: node.y - margin },
+          { x: node.x - margin, y: node.y + NODE_HEIGHT + margin },
+          { x: node.x + NODE_WIDTH + margin, y: node.y + NODE_HEIGHT + margin },
+        ]
+
+        // Keep corners on the clear side of the edge line
+        const clearCorners = corners.filter((c) => {
+          const crx = c.x - sx
+          const cry = c.y - sy
+          const cPerp = crx * (-uy) + cry * ux
+          return clearSide > 0 ? cPerp > 0 : cPerp < 0
+        })
+
+        if (clearCorners.length === 0) continue
+
+        // Pick the corner closest to the source-target midpoint
+        let best = clearCorners[0]
+        let bestDist = Infinity
+        for (const c of clearCorners) {
+          const d = (c.x - midX) ** 2 + (c.y - midY) ** 2
+          if (d < bestDist) { bestDist = d; best = c }
         }
+
+        wps.push({ x: best.x, y: best.y, along })
       }
-      avoidances.set(edge.id, bestPush)
+
+      // Sort waypoints by position along the edge
+      wps.sort((a, b) => a.along - b.along)
+      waypointsMap.set(edge.id, wps.map(({ x, y }) => ({ x, y })))
     }
-    return avoidances
+
+    return waypointsMap
   }, [nodes, edges])
 
   // Get edge connection points using border intersection.
@@ -448,12 +472,10 @@ export const GraphCanvas = memo(function GraphCanvas({
           transformOrigin: "0 0",
         }}
       >
-        {/* Edges SVG — rendered above nodes (z-10) so short edges aren't
-            hidden behind adjacent nodes, but pointer-events-none keeps nodes
-            interactive */}
+        {/* Edges SVG */}
         <svg
           className="absolute pointer-events-none overflow-visible"
-          style={{ left: 0, top: 0, width: 1, height: 1, overflow: "visible", zIndex: 10 }}
+          style={{ left: 0, top: 0, width: 1, height: 1, overflow: "visible" }}
         >
           {/* Shared glow filter — one for all edges */}
           <defs>
@@ -481,7 +503,7 @@ export const GraphCanvas = memo(function GraphCanvas({
                 targetNx={pts.targetNx}
                 targetNy={pts.targetNy}
                 parallelOffset={pOffset}
-                avoidanceOffset={edgeAvoidance.get(edge.id) ?? 0}
+                waypoints={edgeWaypoints.get(edge.id)}
                 status={edge.status}
                 label={edge.label}
                 animateParticles={animateParticles}
