@@ -142,9 +142,12 @@ export const GraphCanvas = memo(function GraphCanvas({
     return offsets
   }, [edges])
 
-  // Get edge connection points using border intersection
+  // Get edge connection points using border intersection.
+  // When parallelOffset != 0, we shift the aim point perpendicular to the
+  // center-to-center line so the border exit/entry point moves along the
+  // node edge — the edge always starts/ends flush on the node border.
   const getEdgePoints = useCallback(
-    (sourceId: string, targetId: string) => {
+    (sourceId: string, targetId: string, parallelOffset = 0) => {
       const sourceNode = nodes.find((n) => n.id === sourceId)
       const targetNode = nodes.find((n) => n.id === targetId)
       if (!sourceNode || !targetNode) {
@@ -156,8 +159,18 @@ export const GraphCanvas = memo(function GraphCanvas({
       const targetCx = targetNode.x + NODE_WIDTH / 2
       const targetCy = targetNode.y + NODE_HEIGHT / 2
 
-      const sourcePoint = getBorderPoint(sourceNode.x, sourceNode.y, targetCx, targetCy)
-      const targetPoint = getBorderPoint(targetNode.x, targetNode.y, sourceCx, sourceCy)
+      // Perpendicular offset applied to aim targets so border points shift
+      // along the node edge instead of floating off it
+      const edgeDx = targetCx - sourceCx
+      const edgeDy = targetCy - sourceCy
+      const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy)
+      const perpX = edgeLen > 0 ? -edgeDy / edgeLen : 0
+      const perpY = edgeLen > 0 ? edgeDx / edgeLen : 0
+      const offX = perpX * parallelOffset
+      const offY = perpY * parallelOffset
+
+      const sourcePoint = getBorderPoint(sourceNode.x, sourceNode.y, targetCx + offX, targetCy + offY)
+      const targetPoint = getBorderPoint(targetNode.x, targetNode.y, sourceCx + offX, sourceCy + offY)
 
       return {
         sourceX: sourcePoint.x,
@@ -387,7 +400,8 @@ export const GraphCanvas = memo(function GraphCanvas({
             </filter>
           </defs>
           {edges.map((edge) => {
-            const pts = getEdgePoints(edge.source, edge.target)
+            const pOffset = edgeOffsets.get(edge.id) ?? 0
+            const pts = getEdgePoints(edge.source, edge.target, pOffset)
             return (
               <AnimatedEdge
                 key={edge.id}
@@ -400,7 +414,7 @@ export const GraphCanvas = memo(function GraphCanvas({
                 sourceNy={pts.sourceNy}
                 targetNx={pts.targetNx}
                 targetNy={pts.targetNy}
-                parallelOffset={edgeOffsets.get(edge.id) ?? 0}
+                parallelOffset={pOffset}
                 status={edge.status}
                 label={edge.label}
                 animateParticles={animateParticles}

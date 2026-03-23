@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useId } from "react"
+import { memo, useId, useRef } from "react"
 import { cn } from "@/lib/utils"
 
 export type EdgeStatus = "idle" | "active" | "error" | "loop"
@@ -17,7 +17,8 @@ export interface AnimatedEdgeProps {
   /** Outward normal direction at target border point */
   targetNx?: number
   targetNy?: number
-  /** Perpendicular offset for parallel edges between the same node pair */
+  /** Perpendicular offset for parallel edges — used only for control point
+   *  curvature, NOT for shifting source/target (that's handled upstream). */
   parallelOffset?: number
   status?: EdgeStatus
   label?: string
@@ -50,7 +51,7 @@ const statusStyles = {
   },
 }
 
-/** Pixels per second for particle travel — constant regardless of edge length */
+/** Pixels per second for particle travel */
 const PARTICLE_SPEED = 120
 
 export const AnimatedEdge = memo(function AnimatedEdge({
@@ -74,61 +75,57 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   const pathId = `path-${id}-${uniqueId}`
   const { stroke, strokeDasharray, particleColor } = statusStyles[status]
 
+  // Source and target are already on the node border (computed upstream)
   const dx = targetX - sourceX
   const dy = targetY - sourceY
   const distance = Math.sqrt(dx * dx + dy * dy)
 
-  // Perpendicular unit vector for offsetting parallel edges
+  // Perpendicular unit vector (for control point curvature only)
   const perpX = distance > 0 ? -dy / distance : 0
   const perpY = distance > 0 ? dx / distance : 0
 
-  // Apply parallel offset to source/target positions
-  const sx = sourceX + perpX * parallelOffset
-  const sy = sourceY + perpY * parallelOffset
-  const tx = targetX + perpX * parallelOffset
-  const ty = targetY + perpY * parallelOffset
+  // Control point offset scales with distance
+  const cpOffset = Math.max(20, Math.min(80, distance * 0.35))
 
-  // Control point offset scales with distance — use a lower minimum so close
-  // nodes still render visible edges instead of disappearing.
-  const cpOffset = Math.max(8, Math.min(80, distance * 0.35))
-
-  const controlX1 = sx + sourceNx * cpOffset + perpX * parallelOffset * 0.5
-  const controlY1 = sy + sourceNy * cpOffset + perpY * parallelOffset * 0.5
-  const controlX2 = tx + targetNx * cpOffset + perpX * parallelOffset * 0.5
-  const controlY2 = ty + targetNy * cpOffset + perpY * parallelOffset * 0.5
+  // Control points: push outward along the border normal, and curve via parallelOffset
+  const controlX1 = sourceX + sourceNx * cpOffset + perpX * parallelOffset * 0.5
+  const controlY1 = sourceY + sourceNy * cpOffset + perpY * parallelOffset * 0.5
+  const controlX2 = targetX + targetNx * cpOffset + perpX * parallelOffset * 0.5
+  const controlY2 = targetY + targetNy * cpOffset + perpY * parallelOffset * 0.5
 
   // Arrow direction: angle from last control point into target
-  const arrowAngle = Math.atan2(ty - controlY2, tx - controlX2)
+  const arrowAngle = Math.atan2(targetY - controlY2, targetX - controlX2)
   const arrowLen = 10
 
-  // Shorten the visible path so the line ends at the arrow base, not past it
-  const endX = tx - arrowLen * Math.cos(arrowAngle)
-  const endY = ty - arrowLen * Math.sin(arrowAngle)
+  // Shorten the visible path so it ends at the arrow base
+  const endX = targetX - arrowLen * Math.cos(arrowAngle)
+  const endY = targetY - arrowLen * Math.sin(arrowAngle)
 
-  // Path for the visible stroke — ends at arrow base
-  const pathD = `M ${sx} ${sy} C ${controlX1} ${controlY1}, ${controlX2} ${controlY2}, ${endX} ${endY}`
+  const pathD = `M ${sourceX} ${sourceY} C ${controlX1} ${controlY1}, ${controlX2} ${controlY2}, ${endX} ${endY}`
 
-  // Arrow polygon
-  const ax1 = tx - arrowLen * Math.cos(arrowAngle - Math.PI / 6)
-  const ay1 = ty - arrowLen * Math.sin(arrowAngle - Math.PI / 6)
-  const ax2 = tx - arrowLen * Math.cos(arrowAngle + Math.PI / 6)
-  const ay2 = ty - arrowLen * Math.sin(arrowAngle + Math.PI / 6)
+  // Arrow polygon (tip at the target border point)
+  const ax1 = targetX - arrowLen * Math.cos(arrowAngle - Math.PI / 6)
+  const ay1 = targetY - arrowLen * Math.sin(arrowAngle - Math.PI / 6)
+  const ax2 = targetX - arrowLen * Math.cos(arrowAngle + Math.PI / 6)
+  const ay2 = targetY - arrowLen * Math.sin(arrowAngle + Math.PI / 6)
 
   // Label position: midpoint of the curve
   const midT = 0.5
-  const labelX = Math.pow(1-midT, 3) * sx + 3*Math.pow(1-midT, 2)*midT * controlX1 + 3*(1-midT)*midT*midT * controlX2 + midT*midT*midT * endX
-  const labelY = Math.pow(1-midT, 3) * sy + 3*Math.pow(1-midT, 2)*midT * controlY1 + 3*(1-midT)*midT*midT * controlY2 + midT*midT*midT * endY
+  const labelX = Math.pow(1-midT, 3) * sourceX + 3*Math.pow(1-midT, 2)*midT * controlX1 + 3*(1-midT)*midT*midT * controlX2 + midT*midT*midT * endX
+  const labelY = Math.pow(1-midT, 3) * sourceY + 3*Math.pow(1-midT, 2)*midT * controlY1 + 3*(1-midT)*midT*midT * controlY2 + midT*midT*midT * endY
 
   const glowFilter = glowFilterId ? `url(#${glowFilterId})` : undefined
 
-  // Approximate path length for constant-speed particles:
-  // average of chord length and control polygon length
-  const seg1 = Math.sqrt((controlX1 - sx) ** 2 + (controlY1 - sy) ** 2)
+  // Approximate path length for constant-speed particles
+  const seg1 = Math.sqrt((controlX1 - sourceX) ** 2 + (controlY1 - sourceY) ** 2)
   const seg2 = Math.sqrt((controlX2 - controlX1) ** 2 + (controlY2 - controlY1) ** 2)
   const seg3 = Math.sqrt((endX - controlX2) ** 2 + (endY - controlY2) ** 2)
-  const chordLen = Math.sqrt((endX - sx) ** 2 + (endY - sy) ** 2)
+  const chordLen = Math.sqrt((endX - sourceX) ** 2 + (endY - sourceY) ** 2)
   const approxLen = (chordLen + seg1 + seg2 + seg3) / 2
-  const particleDuration = Math.max(0.6, approxLen / PARTICLE_SPEED)
+  const rawDuration = Math.max(0.8, approxLen / PARTICLE_SPEED)
+  // Quantize to 0.25s steps so dragging nodes doesn't cause erratic speed
+  // changes from continuous duration recalculation
+  const particleDuration = Math.round(rawDuration * 4) / 4
 
   return (
     <g className={className}>
@@ -145,9 +142,9 @@ export const AnimatedEdge = memo(function AnimatedEdge({
         className={cn(status === "loop" && "animate-pulse")}
       />
 
-      {/* Arrow marker - tip at border point */}
+      {/* Arrow marker — tip flush at node border */}
       <polygon
-        points={`${ax1},${ay1} ${tx},${ty} ${ax2},${ay2}`}
+        points={`${ax1},${ay1} ${targetX},${targetY} ${ax2},${ay2}`}
         fill={stroke}
       />
 
@@ -177,8 +174,7 @@ export const AnimatedEdge = memo(function AnimatedEdge({
         </g>
       )}
 
-      {/* Animated particles for active/loop states — travel along the
-          shortened path so they terminate at the arrow base */}
+      {/* Animated particles — travel along shortened path, stop at arrow base */}
       {animateParticles && (status === "active" || status === "loop") && (
         <>
           {[0, 0.33, 0.66].map((offset, i) => (
