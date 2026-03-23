@@ -143,54 +143,65 @@ export const GraphCanvas = memo(function GraphCanvas({
   }, [edges])
 
   // Compute avoidance offsets — push edge curves away from intermediate nodes
-  // that would otherwise be intersected.
+  // that would otherwise be intersected. Computes the exact perpendicular
+  // extent of each blocking node at the edge angle and the minimum control-
+  // point deflection needed to clear it (accounting for bezier attenuation).
   const edgeAvoidance = useMemo(() => {
     const avoidances = new Map<string, number>()
+    const halfW = NODE_WIDTH / 2
+    const halfH = NODE_HEIGHT / 2
+
     for (const edge of edges) {
       const srcNode = nodes.find((n) => n.id === edge.source)
       const tgtNode = nodes.find((n) => n.id === edge.target)
       if (!srcNode || !tgtNode) { avoidances.set(edge.id, 0); continue }
 
-      const sx = srcNode.x + NODE_WIDTH / 2
-      const sy = srcNode.y + NODE_HEIGHT / 2
-      const ex = tgtNode.x + NODE_WIDTH / 2
-      const ey = tgtNode.y + NODE_HEIGHT / 2
+      const sx = srcNode.x + halfW
+      const sy = srcNode.y + halfH
+      const ex = tgtNode.x + halfW
+      const ey = tgtNode.y + halfH
       const eDx = ex - sx
       const eDy = ey - sy
       const eLen = Math.sqrt(eDx * eDx + eDy * eDy)
       if (eLen < 1) { avoidances.set(edge.id, 0); continue }
 
-      // Unit vectors along and perpendicular to the edge
       const ux = eDx / eLen
       const uy = eDy / eLen
 
-      let totalPush = 0
+      // Perpendicular half-extent of the rectangle at this edge angle
+      // (Minkowski sum projection)
+      const perpExtent = halfW * Math.abs(uy) + halfH * Math.abs(ux)
+      const padding = 20
+
+      let bestPush = 0
       for (const node of nodes) {
         if (node.id === edge.source || node.id === edge.target) continue
-        const ncx = node.x + NODE_WIDTH / 2
-        const ncy = node.y + NODE_HEIGHT / 2
+        const ncx = node.x + halfW
+        const ncy = node.y + halfH
         const rx = ncx - sx
         const ry = ncy - sy
-        const along = rx * ux + ry * uy      // projection along edge
-        const perp = rx * (-uy) + ry * ux     // signed perpendicular distance
+        const along = rx * ux + ry * uy
+        const perp = rx * (-uy) + ry * ux
 
-        // Only consider nodes whose projection falls between source and target
-        if (along < 0 || along > eLen) continue
+        // Node must project between source and target (with tolerance)
+        if (along < -halfW || along > eLen + halfW) continue
 
-        // Clearance: half the node diagonal + padding
-        const clearance = Math.sqrt(NODE_WIDTH * NODE_WIDTH + NODE_HEIGHT * NODE_HEIGHT) / 2 + 24
         const absPerp = Math.abs(perp)
+        const clearance = perpExtent + padding
         if (absPerp >= clearance) continue
 
-        // Strength: stronger push the closer the node is to the line
-        const strength = (clearance - absPerp) / clearance
-        // Push curve to the side opposite the obstructing node
+        // Exact push needed: curve midpoint deflects ~75% of control-point
+        // offset, so we need cp_offset = gap / 0.75
+        const gap = clearance - absPerp + padding
+        const neededPush = gap / 0.75
         const pushDir = perp >= 0 ? -1 : 1
-        // Weight by how centered the node is along the edge (strongest at midpoint)
-        const centeredness = 1 - Math.abs(along / eLen - 0.5) * 2
-        totalPush += pushDir * strength * centeredness * 100
+
+        // Keep the largest needed push (sign-aware — pick dominant side)
+        if (Math.abs(neededPush) > Math.abs(bestPush)) {
+          bestPush = pushDir * neededPush
+        }
       }
-      avoidances.set(edge.id, totalPush)
+      avoidances.set(edge.id, bestPush)
     }
     return avoidances
   }, [nodes, edges])
@@ -437,10 +448,12 @@ export const GraphCanvas = memo(function GraphCanvas({
           transformOrigin: "0 0",
         }}
       >
-        {/* Edges SVG */}
+        {/* Edges SVG — rendered above nodes (z-10) so short edges aren't
+            hidden behind adjacent nodes, but pointer-events-none keeps nodes
+            interactive */}
         <svg
           className="absolute pointer-events-none overflow-visible"
-          style={{ left: 0, top: 0, width: 1, height: 1, overflow: "visible" }}
+          style={{ left: 0, top: 0, width: 1, height: 1, overflow: "visible", zIndex: 10 }}
         >
           {/* Shared glow filter — one for all edges */}
           <defs>
