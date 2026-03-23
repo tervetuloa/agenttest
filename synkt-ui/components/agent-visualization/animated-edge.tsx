@@ -50,6 +50,9 @@ const statusStyles = {
   },
 }
 
+/** Pixels per second for particle travel — constant regardless of edge length */
+const PARTICLE_SPEED = 120
+
 export const AnimatedEdge = memo(function AnimatedEdge({
   id,
   sourceX,
@@ -85,20 +88,27 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   const tx = targetX + perpX * parallelOffset
   const ty = targetY + perpY * parallelOffset
 
-  // Control point offset scales with distance — edges flow outward from each node's
-  // border along the normal before curving toward the other node.
-  const cpOffset = Math.max(30, Math.min(80, distance * 0.35))
+  // Control point offset scales with distance — use a lower minimum so close
+  // nodes still render visible edges instead of disappearing.
+  const cpOffset = Math.max(8, Math.min(80, distance * 0.35))
 
   const controlX1 = sx + sourceNx * cpOffset + perpX * parallelOffset * 0.5
   const controlY1 = sy + sourceNy * cpOffset + perpY * parallelOffset * 0.5
   const controlX2 = tx + targetNx * cpOffset + perpX * parallelOffset * 0.5
   const controlY2 = ty + targetNy * cpOffset + perpY * parallelOffset * 0.5
 
-  const pathD = `M ${sx} ${sy} C ${controlX1} ${controlY1}, ${controlX2} ${controlY2}, ${tx} ${ty}`
-
-  // Arrow direction: angle at target (from last control point into target)
+  // Arrow direction: angle from last control point into target
   const arrowAngle = Math.atan2(ty - controlY2, tx - controlX2)
   const arrowLen = 10
+
+  // Shorten the visible path so the line ends at the arrow base, not past it
+  const endX = tx - arrowLen * Math.cos(arrowAngle)
+  const endY = ty - arrowLen * Math.sin(arrowAngle)
+
+  // Path for the visible stroke — ends at arrow base
+  const pathD = `M ${sx} ${sy} C ${controlX1} ${controlY1}, ${controlX2} ${controlY2}, ${endX} ${endY}`
+
+  // Arrow polygon
   const ax1 = tx - arrowLen * Math.cos(arrowAngle - Math.PI / 6)
   const ay1 = ty - arrowLen * Math.sin(arrowAngle - Math.PI / 6)
   const ax2 = tx - arrowLen * Math.cos(arrowAngle + Math.PI / 6)
@@ -106,14 +116,23 @@ export const AnimatedEdge = memo(function AnimatedEdge({
 
   // Label position: midpoint of the curve
   const midT = 0.5
-  const labelX = Math.pow(1-midT, 3) * sx + 3*Math.pow(1-midT, 2)*midT * controlX1 + 3*(1-midT)*midT*midT * controlX2 + midT*midT*midT * tx
-  const labelY = Math.pow(1-midT, 3) * sy + 3*Math.pow(1-midT, 2)*midT * controlY1 + 3*(1-midT)*midT*midT * controlY2 + midT*midT*midT * ty
+  const labelX = Math.pow(1-midT, 3) * sx + 3*Math.pow(1-midT, 2)*midT * controlX1 + 3*(1-midT)*midT*midT * controlX2 + midT*midT*midT * endX
+  const labelY = Math.pow(1-midT, 3) * sy + 3*Math.pow(1-midT, 2)*midT * controlY1 + 3*(1-midT)*midT*midT * controlY2 + midT*midT*midT * endY
 
   const glowFilter = glowFilterId ? `url(#${glowFilterId})` : undefined
 
+  // Approximate path length for constant-speed particles:
+  // average of chord length and control polygon length
+  const seg1 = Math.sqrt((controlX1 - sx) ** 2 + (controlY1 - sy) ** 2)
+  const seg2 = Math.sqrt((controlX2 - controlX1) ** 2 + (controlY2 - controlY1) ** 2)
+  const seg3 = Math.sqrt((endX - controlX2) ** 2 + (endY - controlY2) ** 2)
+  const chordLen = Math.sqrt((endX - sx) ** 2 + (endY - sy) ** 2)
+  const approxLen = (chordLen + seg1 + seg2 + seg3) / 2
+  const particleDuration = Math.max(0.6, approxLen / PARTICLE_SPEED)
+
   return (
     <g className={className}>
-      {/* Main path */}
+      {/* Main path — ends at arrow base */}
       <path
         id={pathId}
         d={pathD}
@@ -126,7 +145,7 @@ export const AnimatedEdge = memo(function AnimatedEdge({
         className={cn(status === "loop" && "animate-pulse")}
       />
 
-      {/* Arrow marker - rotated to match edge direction */}
+      {/* Arrow marker - tip at border point */}
       <polygon
         points={`${ax1},${ay1} ${tx},${ty} ${ax2},${ay2}`}
         fill={stroke}
@@ -158,7 +177,8 @@ export const AnimatedEdge = memo(function AnimatedEdge({
         </g>
       )}
 
-      {/* Animated particles for active/loop states */}
+      {/* Animated particles for active/loop states — travel along the
+          shortened path so they terminate at the arrow base */}
       {animateParticles && (status === "active" || status === "loop") && (
         <>
           {[0, 0.33, 0.66].map((offset, i) => (
@@ -170,7 +190,7 @@ export const AnimatedEdge = memo(function AnimatedEdge({
               className="opacity-0"
               style={{
                 offsetPath: `path("${pathD}")`,
-                animation: `particle-flow 1.5s ease-in-out ${offset * 1.5}s infinite`,
+                animation: `particle-flow ${particleDuration}s ease-in-out ${offset * particleDuration}s infinite`,
               }}
             />
           ))}

@@ -118,7 +118,10 @@ export const GraphCanvas = memo(function GraphCanvas({
       )
     : null
 
-  // Precompute parallel offsets for edges sharing the same node pair
+  // Precompute parallel offsets for edges sharing the same node pair.
+  // Edges in opposite directions (A→B vs B→A) have flipped perpendicular
+  // vectors, so we negate the offset for "reversed" edges to keep them
+  // visually on opposite sides of each other.
   const edgeOffsets = useMemo(() => {
     const pairCounts = new Map<string, number>()
     const pairIndices = new Map<string, number>()
@@ -132,7 +135,9 @@ export const GraphCanvas = memo(function GraphCanvas({
       const count = pairCounts.get(pairKey)!
       const idx = pairIndices.get(pairKey) ?? 0
       pairIndices.set(pairKey, idx + 1)
-      offsets.set(edge.id, count > 1 ? (idx - (count - 1) / 2) * 16 : 0)
+      const isReversed = edge.source > edge.target
+      const sign = isReversed ? -1 : 1
+      offsets.set(edge.id, count > 1 ? (idx - (count - 1) / 2) * 20 * sign : 0)
     }
     return offsets
   }, [edges])
