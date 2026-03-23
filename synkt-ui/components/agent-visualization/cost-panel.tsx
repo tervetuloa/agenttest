@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useEffect, useState } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 import { DollarSign, Coins, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -13,6 +13,7 @@ export interface CostPanelProps {
 
 function AnimatedNumber({ value, format }: { value: number; format: (n: number) => string }) {
   const [displayValue, setDisplayValue] = useState(value)
+  const rafRef = useRef(0)
 
   useEffect(() => {
     const start = displayValue
@@ -27,11 +28,12 @@ function AnimatedNumber({ value, format }: { value: number; format: (n: number) 
       setDisplayValue(start + (end - start) * easeOut)
 
       if (progress < 1) {
-        requestAnimationFrame(animate)
+        rafRef.current = requestAnimationFrame(animate)
       }
     }
 
-    requestAnimationFrame(animate)
+    rafRef.current = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(rafRef.current)
   }, [value])
 
   return <span className="animate-[count-up_0.3s_ease-out]">{format(displayValue)}</span>

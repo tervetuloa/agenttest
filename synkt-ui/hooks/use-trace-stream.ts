@@ -49,9 +49,12 @@ export function useTraceStream(url: string = "http://localhost:8000/stream") {
         try {
           const data = JSON.parse(event.data) as TraceData
           setTraceData(data)
-          // Append to history
-          historyRef.current = [...historyRef.current, data]
-          setTraceHistory(historyRef.current)
+          // Append to history (cap at 500 entries to prevent OOM)
+          if (historyRef.current.length >= 500) {
+            historyRef.current = historyRef.current.slice(-250)
+          }
+          historyRef.current.push(data)
+          setTraceHistory([...historyRef.current])
         } catch {
           // Ignore parse errors
         }
