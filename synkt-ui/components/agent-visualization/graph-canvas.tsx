@@ -118,10 +118,7 @@ export const GraphCanvas = memo(function GraphCanvas({
       )
     : null
 
-  // Precompute parallel offsets for edges sharing the same node pair.
-  // Edges in opposite directions (A→B vs B→A) have flipped perpendicular
-  // vectors, so we negate the offset for "reversed" edges to keep them
-  // visually on opposite sides of each other.
+  // Parallel offsets for edges sharing the same node pair
   const edgeOffsets = useMemo(() => {
     const pairCounts = new Map<string, number>()
     const pairIndices = new Map<string, number>()
@@ -135,144 +132,133 @@ export const GraphCanvas = memo(function GraphCanvas({
       const count = pairCounts.get(pairKey)!
       const idx = pairIndices.get(pairKey) ?? 0
       pairIndices.set(pairKey, idx + 1)
-      const isReversed = edge.source > edge.target
-      const sign = isReversed ? -1 : 1
-      offsets.set(edge.id, count > 1 ? (idx - (count - 1) / 2) * 20 * sign : 0)
+      offsets.set(edge.id, count > 1 ? (idx - (count - 1) / 2) * 20 : 0)
     }
     return offsets
   }, [edges])
 
-  // Compute waypoints for edges that would pass through other nodes.
-  // For each blocking node, pick the nearest clear corner as a waypoint
-  // so the edge routes around the obstruction with straight segments and
-  // smooth rounded corners.
-  const edgeWaypoints = useMemo(() => {
-    const waypointsMap = new Map<string, { x: number; y: number }[]>()
+  // ─── Orthogonal edge routing ───
+  // Compute exit/entry points and orthogonal waypoints for every edge.
+  // Edges use only horizontal/vertical segments with smooth rounded corners.
+  const edgeRoutes = useMemo(() => {
+    const routes = new Map<string, {
+      sourceX: number; sourceY: number
+      targetX: number; targetY: number
+      targetNx: number; targetNy: number
+      waypoints: { x: number; y: number }[]
+    }>()
+
     const halfW = NODE_WIDTH / 2
     const halfH = NODE_HEIGHT / 2
-    const margin = 30
 
     for (const edge of edges) {
       const srcNode = nodes.find((n) => n.id === edge.source)
       const tgtNode = nodes.find((n) => n.id === edge.target)
-      if (!srcNode || !tgtNode) { waypointsMap.set(edge.id, []); continue }
-
-      const sx = srcNode.x + halfW
-      const sy = srcNode.y + halfH
-      const tx = tgtNode.x + halfW
-      const ty = tgtNode.y + halfH
-      const eDx = tx - sx
-      const eDy = ty - sy
-      const eLen = Math.sqrt(eDx * eDx + eDy * eDy)
-      if (eLen < 1) { waypointsMap.set(edge.id, []); continue }
-
-      const ux = eDx / eLen
-      const uy = eDy / eLen
-      const midX = (sx + tx) / 2
-      const midY = (sy + ty) / 2
-
-      const wps: { x: number; y: number; along: number }[] = []
-
-      for (const node of nodes) {
-        if (node.id === edge.source || node.id === edge.target) continue
-        const ncx = node.x + halfW
-        const ncy = node.y + halfH
-        const rx = ncx - sx
-        const ry = ncy - sy
-        const along = rx * ux + ry * uy
-        const perp = rx * (-uy) + ry * ux
-
-        // Node must project between source and target
-        const alongExtent = halfW * Math.abs(ux) + halfH * Math.abs(uy)
-        if (along + alongExtent < 0 || along - alongExtent > eLen) continue
-
-        // Check if node blocks the edge line
-        const perpExtent = halfW * Math.abs(uy) + halfH * Math.abs(ux)
-        if (Math.abs(perp) >= perpExtent + 20) continue
-
-        // Node blocks — pick the nearest clear corner as waypoint.
-        // "Clear side" is opposite to the node center relative to the edge line.
-        const clearSide = perp > 0 ? -1 : 1
-
-        const corners = [
-          { x: node.x - margin, y: node.y - margin },
-          { x: node.x + NODE_WIDTH + margin, y: node.y - margin },
-          { x: node.x - margin, y: node.y + NODE_HEIGHT + margin },
-          { x: node.x + NODE_WIDTH + margin, y: node.y + NODE_HEIGHT + margin },
-        ]
-
-        // Keep corners on the clear side of the edge line
-        const clearCorners = corners.filter((c) => {
-          const crx = c.x - sx
-          const cry = c.y - sy
-          const cPerp = crx * (-uy) + cry * ux
-          return clearSide > 0 ? cPerp > 0 : cPerp < 0
-        })
-
-        if (clearCorners.length === 0) continue
-
-        // Pick the corner closest to the source-target midpoint
-        let best = clearCorners[0]
-        let bestDist = Infinity
-        for (const c of clearCorners) {
-          const d = (c.x - midX) ** 2 + (c.y - midY) ** 2
-          if (d < bestDist) { bestDist = d; best = c }
-        }
-
-        wps.push({ x: best.x, y: best.y, along })
+      if (!srcNode || !tgtNode) {
+        routes.set(edge.id, { sourceX: 0, sourceY: 0, targetX: 0, targetY: 0, targetNx: 0, targetNy: -1, waypoints: [] })
+        continue
       }
 
-      // Sort waypoints by position along the edge
-      wps.sort((a, b) => a.along - b.along)
-      waypointsMap.set(edge.id, wps.map(({ x, y }) => ({ x, y })))
+      const srcCx = srcNode.x + halfW
+      const srcCy = srcNode.y + halfH
+      const tgtCx = tgtNode.x + halfW
+      const tgtCy = tgtNode.y + halfH
+      const dx = tgtCx - srcCx
+      const dy = tgtCy - srcCy
+      const pOff = edgeOffsets.get(edge.id) ?? 0
+
+      // Determine exit/entry side based on which rectangle side the
+      // center-to-center line exits through (same logic as getBorderPoint)
+      const primaryVertical = Math.abs(dy) * NODE_WIDTH >= Math.abs(dx) * NODE_HEIGHT
+      let exitSide: "top" | "bottom" | "left" | "right"
+      let entrySide: "top" | "bottom" | "left" | "right"
+
+      if (primaryVertical) {
+        exitSide = dy > 0 ? "bottom" : "top"
+        entrySide = dy > 0 ? "top" : "bottom"
+      } else {
+        exitSide = dx > 0 ? "right" : "left"
+        entrySide = dx > 0 ? "left" : "right"
+      }
+
+      // Exit point on source border, shifted by parallelOffset along the side
+      let sx: number, sy: number
+      switch (exitSide) {
+        case "top":    sx = srcCx + pOff; sy = srcNode.y; break
+        case "bottom": sx = srcCx + pOff; sy = srcNode.y + NODE_HEIGHT; break
+        case "left":   sx = srcNode.x; sy = srcCy + pOff; break
+        case "right":  sx = srcNode.x + NODE_WIDTH; sy = srcCy + pOff; break
+      }
+
+      // Entry point on target border
+      let tx: number, ty: number, tnx: number, tny: number
+      switch (entrySide) {
+        case "top":    tx = tgtCx + pOff; ty = tgtNode.y; tnx = 0; tny = -1; break
+        case "bottom": tx = tgtCx + pOff; ty = tgtNode.y + NODE_HEIGHT; tnx = 0; tny = 1; break
+        case "left":   tx = tgtNode.x; ty = tgtCy + pOff; tnx = -1; tny = 0; break
+        case "right":  tx = tgtNode.x + NODE_WIDTH; ty = tgtCy + pOff; tnx = 1; tny = 0; break
+      }
+
+      // Compute orthogonal waypoints
+      const waypoints: { x: number; y: number }[] = []
+      const exitV = exitSide === "top" || exitSide === "bottom"
+      const entryV = entrySide === "top" || entrySide === "bottom"
+
+      if (exitV && entryV) {
+        // Both vertical → Z-shape: down/up → horizontal → down/up
+        if (Math.abs(sx - tx) > 1) {
+          let midY = (sy + ty) / 2
+
+          // Avoid blocking nodes on the horizontal segment
+          for (const n of nodes) {
+            if (n.id === edge.source || n.id === edge.target) continue
+            if (midY > n.y - 10 && midY < n.y + NODE_HEIGHT + 10) {
+              const lineL = Math.min(sx, tx) - 5
+              const lineR = Math.max(sx, tx) + 5
+              if (n.x + NODE_WIDTH > lineL && n.x < lineR) {
+                const above = n.y - 20
+                const below = n.y + NODE_HEIGHT + 20
+                midY = Math.abs(above - (sy + ty) / 2) < Math.abs(below - (sy + ty) / 2) ? above : below
+              }
+            }
+          }
+
+          waypoints.push({ x: sx, y: midY }, { x: tx, y: midY })
+        }
+      } else if (!exitV && !entryV) {
+        // Both horizontal → Z-shape: left/right → vertical → left/right
+        if (Math.abs(sy - ty) > 1) {
+          let midX = (sx + tx) / 2
+
+          for (const n of nodes) {
+            if (n.id === edge.source || n.id === edge.target) continue
+            if (midX > n.x - 10 && midX < n.x + NODE_WIDTH + 10) {
+              const lineT = Math.min(sy, ty) - 5
+              const lineB = Math.max(sy, ty) + 5
+              if (n.y + NODE_HEIGHT > lineT && n.y < lineB) {
+                const left = n.x - 20
+                const right = n.x + NODE_WIDTH + 20
+                midX = Math.abs(left - (sx + tx) / 2) < Math.abs(right - (sx + tx) / 2) ? left : right
+              }
+            }
+          }
+
+          waypoints.push({ x: midX, y: sy }, { x: midX, y: ty })
+        }
+      } else {
+        // Perpendicular → L-shape: one 90° turn
+        if (exitV) {
+          waypoints.push({ x: sx, y: ty })
+        } else {
+          waypoints.push({ x: tx, y: sy })
+        }
+      }
+
+      routes.set(edge.id, { sourceX: sx, sourceY: sy, targetX: tx, targetY: ty, targetNx: tnx, targetNy: tny, waypoints })
     }
 
-    return waypointsMap
-  }, [nodes, edges])
-
-  // Get edge connection points using border intersection.
-  // When parallelOffset != 0, we shift the aim point perpendicular to the
-  // center-to-center line so the border exit/entry point moves along the
-  // node edge — the edge always starts/ends flush on the node border.
-  const getEdgePoints = useCallback(
-    (sourceId: string, targetId: string, parallelOffset = 0) => {
-      const sourceNode = nodes.find((n) => n.id === sourceId)
-      const targetNode = nodes.find((n) => n.id === targetId)
-      if (!sourceNode || !targetNode) {
-        return { sourceX: 0, sourceY: 0, targetX: 0, targetY: 0, sourceNx: 0, sourceNy: 0, targetNx: 0, targetNy: 0 }
-      }
-
-      const sourceCx = sourceNode.x + NODE_WIDTH / 2
-      const sourceCy = sourceNode.y + NODE_HEIGHT / 2
-      const targetCx = targetNode.x + NODE_WIDTH / 2
-      const targetCy = targetNode.y + NODE_HEIGHT / 2
-
-      // Perpendicular offset applied to aim targets so border points shift
-      // along the node edge instead of floating off it
-      const edgeDx = targetCx - sourceCx
-      const edgeDy = targetCy - sourceCy
-      const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy)
-      const perpX = edgeLen > 0 ? -edgeDy / edgeLen : 0
-      const perpY = edgeLen > 0 ? edgeDx / edgeLen : 0
-      const offX = perpX * parallelOffset
-      const offY = perpY * parallelOffset
-
-      const sourcePoint = getBorderPoint(sourceNode.x, sourceNode.y, targetCx + offX, targetCy + offY)
-      const targetPoint = getBorderPoint(targetNode.x, targetNode.y, sourceCx + offX, sourceCy + offY)
-
-      return {
-        sourceX: sourcePoint.x,
-        sourceY: sourcePoint.y,
-        targetX: targetPoint.x,
-        targetY: targetPoint.y,
-        sourceNx: sourcePoint.nx,
-        sourceNy: sourcePoint.ny,
-        targetNx: targetPoint.nx,
-        targetNy: targetPoint.ny,
-      }
-    },
-    [nodes]
-  )
+    return routes
+  }, [nodes, edges, edgeOffsets])
 
   // Handle canvas panning
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -488,22 +474,19 @@ export const GraphCanvas = memo(function GraphCanvas({
             </filter>
           </defs>
           {edges.map((edge) => {
-            const pOffset = edgeOffsets.get(edge.id) ?? 0
-            const pts = getEdgePoints(edge.source, edge.target, pOffset)
+            const route = edgeRoutes.get(edge.id)
+            if (!route) return null
             return (
               <AnimatedEdge
                 key={edge.id}
                 id={edge.id}
-                sourceX={pts.sourceX}
-                sourceY={pts.sourceY}
-                targetX={pts.targetX}
-                targetY={pts.targetY}
-                sourceNx={pts.sourceNx}
-                sourceNy={pts.sourceNy}
-                targetNx={pts.targetNx}
-                targetNy={pts.targetNy}
-                parallelOffset={pOffset}
-                waypoints={edgeWaypoints.get(edge.id)}
+                sourceX={route.sourceX}
+                sourceY={route.sourceY}
+                targetX={route.targetX}
+                targetY={route.targetY}
+                targetNx={route.targetNx}
+                targetNy={route.targetNy}
+                waypoints={route.waypoints}
                 status={edge.status}
                 label={edge.label}
                 animateParticles={animateParticles}

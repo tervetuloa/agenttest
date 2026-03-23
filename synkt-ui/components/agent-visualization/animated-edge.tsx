@@ -11,21 +11,14 @@ export interface AnimatedEdgeProps {
   sourceY: number
   targetX: number
   targetY: number
-  /** Outward normal direction at source border point */
-  sourceNx?: number
-  sourceNy?: number
-  /** Outward normal direction at target border point */
+  /** Outward normal at target border — used for arrow direction */
   targetNx?: number
   targetNy?: number
-  /** Perpendicular offset for parallel edges — used only for control point
-   *  curvature, NOT for shifting source/target (that's handled upstream). */
-  parallelOffset?: number
-  /** Waypoints to route through (for node avoidance) */
+  /** Orthogonal waypoints (H/V turn points) computed upstream */
   waypoints?: { x: number; y: number }[]
   status?: EdgeStatus
   label?: string
   animateParticles?: boolean
-  /** ID of the shared glow filter in the parent SVG */
   glowFilterId?: string
   className?: string
 }
@@ -53,13 +46,11 @@ const statusStyles = {
   },
 }
 
-/** Pixels per second for particle travel */
 const PARTICLE_SPEED = 120
 const PARTICLE_COUNT = 3
 
-/** Build a path through a series of points with rounded quadratic-bezier
- *  corners at each intermediate point. Radius is capped to 40% of the
- *  shortest adjacent segment so curves never overshoot. */
+/** Build a path through points with smooth quadratic-bezier rounded corners.
+ *  All segments are horizontal or vertical; corners get a smooth 90° arc. */
 function buildRoundedPath(points: { x: number; y: number }[], radius: number): string {
   if (points.length < 2) return ""
   if (points.length === 2) {
@@ -82,10 +73,8 @@ function buildRoundedPath(points: { x: number; y: number }[], radius: number): s
 
     const r = Math.min(radius, d1len * 0.4, d2len * 0.4)
 
-    // Approach: on incoming segment, r before the corner
     const ax = curr.x - (d1x / d1len) * r
     const ay = curr.y - (d1y / d1len) * r
-    // Exit: on outgoing segment, r after the corner
     const ex = curr.x + (d2x / d2len) * r
     const ey = curr.y + (d2y / d2len) * r
 
@@ -103,11 +92,8 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   sourceY,
   targetX,
   targetY,
-  sourceNx = 0,
-  sourceNy = 0,
   targetNx = 0,
-  targetNy = 0,
-  parallelOffset = 0,
+  targetNy = -1,
   waypoints = [],
   status = "idle",
   label,
@@ -130,73 +116,20 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   // Arrow scales down for short edges
   const arrowLen = Math.min(10, distance * 0.3)
 
-  let pathD: string
-  let arrowAngle: number
-  let labelX: number
-  let labelY: number
+  // Arrow direction: inward (reverse of outward target normal)
+  const arrowAngle = Math.atan2(-targetNy, -targetNx)
 
-  if (waypoints.length > 0) {
-    // ── Waypoint routing: straight segments with smooth rounded corners ──
-    // Exit source along its border normal for a short straight segment,
-    // route through each waypoint, then approach target along its normal.
+  // End point: pull path back from border along the outward normal
+  const endX = targetX + targetNx * arrowLen
+  const endY = targetY + targetNy * arrowLen
 
-    const exitLen = Math.min(30, distance * 0.2)
-
-    const exitPt = {
-      x: sourceX + sourceNx * exitLen,
-      y: sourceY + sourceNy * exitLen,
-    }
-
-    // Arrow direction: inward along target normal
-    arrowAngle = Math.atan2(-targetNy, -targetNx)
-    // End point pulled back from border by arrowLen along normal
-    const endX = targetX + targetNx * arrowLen
-    const endY = targetY + targetNy * arrowLen
-
-    // Entry approach: a short straight segment along target normal
-    const entryPt = {
-      x: endX + targetNx * exitLen,
-      y: endY + targetNy * exitLen,
-    }
-
-    const allPoints = [
-      { x: sourceX, y: sourceY },
-      exitPt,
-      ...waypoints,
-      entryPt,
-      { x: endX, y: endY },
-    ]
-
-    pathD = buildRoundedPath(allPoints, 25)
-
-    // Label near the first waypoint
-    labelX = waypoints[0].x
-    labelY = waypoints[0].y - 16
-  } else {
-    // ── Normal routing: single cubic bezier (L-shaped curve) ──
-    // For short edges (< 40px), cpOffset → 0 so curve degenerates smoothly
-    // to a straight line, preventing invisible micro-curves.
-    const cpOffset = distance < 40 ? 0 : Math.min(80, distance * 0.35)
-
-    const perpX = distance > 0 ? -dy / distance : 0
-    const perpY = distance > 0 ? dx / distance : 0
-    const curvePush = parallelOffset * 0.5
-
-    const controlX1 = sourceX + sourceNx * cpOffset + perpX * curvePush
-    const controlY1 = sourceY + sourceNy * cpOffset + perpY * curvePush
-    const controlX2 = targetX + targetNx * cpOffset + perpX * curvePush
-    const controlY2 = targetY + targetNy * cpOffset + perpY * curvePush
-
-    arrowAngle = Math.atan2(targetY - controlY2, targetX - controlX2)
-    const endX = targetX - arrowLen * Math.cos(arrowAngle)
-    const endY = targetY - arrowLen * Math.sin(arrowAngle)
-
-    pathD = `M ${sourceX} ${sourceY} C ${controlX1} ${controlY1}, ${controlX2} ${controlY2}, ${endX} ${endY}`
-
-    const midT = 0.5
-    labelX = Math.pow(1-midT, 3) * sourceX + 3*Math.pow(1-midT, 2)*midT * controlX1 + 3*(1-midT)*midT*midT * controlX2 + midT*midT*midT * endX
-    labelY = Math.pow(1-midT, 3) * sourceY + 3*Math.pow(1-midT, 2)*midT * controlY1 + 3*(1-midT)*midT*midT * controlY2 + midT*midT*midT * endY
-  }
+  // Build orthogonal path through waypoints with rounded corners
+  const allPoints = [
+    { x: sourceX, y: sourceY },
+    ...waypoints,
+    { x: endX, y: endY },
+  ]
+  const pathD = buildRoundedPath(allPoints, 20)
 
   // Arrow polygon
   const ax1 = targetX - arrowLen * Math.cos(arrowAngle - Math.PI / 6)
@@ -204,10 +137,20 @@ export const AnimatedEdge = memo(function AnimatedEdge({
   const ax2 = targetX - arrowLen * Math.cos(arrowAngle + Math.PI / 6)
   const ay2 = targetY - arrowLen * Math.sin(arrowAngle + Math.PI / 6)
 
+  // Label at midpoint of the path
+  let labelX: number, labelY: number
+  if (waypoints.length > 0) {
+    const mid = waypoints[Math.floor(waypoints.length / 2)]
+    labelX = mid.x
+    labelY = mid.y - 16
+  } else {
+    labelX = (sourceX + endX) / 2
+    labelY = (sourceY + endY) / 2 - 16
+  }
+
   const glowFilter = glowFilterId ? `url(#${glowFilterId})` : undefined
   const showParticles = animateParticles && (status === "active" || status === "loop")
 
-  // rAF-based particle animation with stable global clock
   const setParticleRef = useCallback((el: SVGCircleElement | null, i: number) => {
     particleRefs.current[i] = el
   }, [])
