@@ -61,13 +61,24 @@ function getBorderPoint(
   const bx = cx + dx * scale
   const by = cy + dy * scale
 
-  // Determine outward normal based on which side was hit
-  let nx = 0, ny = 0
-  if (scaleX < scaleY) {
-    nx = dx > 0 ? 1 : -1
-  } else {
-    ny = dy > 0 ? 1 : -1
-  }
+  // Smooth normal blending near corners to avoid sudden jumps when an edge
+  // transitions between sides. We use the angle to the corner diagonal as a
+  // blend factor: far from the corner → pure axis-aligned normal; near the
+  // corner → blend between the two adjacent side normals.
+  const angle = Math.atan2(Math.abs(dy), Math.abs(dx))
+  const cornerAngle = Math.atan2(halfH, halfW)
+  // How far (0–1) we are from the corner diagonal, mapped through a smooth blend zone
+  const blendZone = 0.3 // radians around the corner to blend over
+  const t = Math.max(0, Math.min(1, (angle - cornerAngle + blendZone) / (2 * blendZone)))
+  // t=0 → hitting the vertical side (left/right), t=1 → hitting the horizontal side (top/bottom)
+  const sideNx = dx > 0 ? 1 : -1
+  const sideNy = dy > 0 ? 1 : -1
+  let nx = (1 - t) * sideNx
+  let ny = t * sideNy
+  // Normalize
+  const len = Math.sqrt(nx * nx + ny * ny) || 1
+  nx /= len
+  ny /= len
 
   return { x: bx, y: by, nx, ny }
 }
