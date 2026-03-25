@@ -113,9 +113,9 @@ export const AgentNode = memo(function AgentNode({
       {/* Structural warnings */}
       {hasWarnings && (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {structuralWarnings!.map((warning) => (
+          {structuralWarnings!.map((warning, index) => (
             <span
-              key={warning}
+              key={`${warning}-${index}`}
               className={cn(
                 "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold",
                 warningColors[warning]

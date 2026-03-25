@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip("networkx")
+
 from synkt.analysis.graph_topology import GraphTopologyAnalyzer
 from synkt.assertions.structural import assert_graph_valid
 

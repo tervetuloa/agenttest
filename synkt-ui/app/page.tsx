@@ -137,35 +137,42 @@ function traceToGraph(trace: TraceData, topology: TopologyData | null, showEdgeL
   const agents = trace.agents
   const cols = Math.max(Math.ceil(Math.sqrt(agents.length)), 2)
 
-  // Build warning map from topology data
-  const warningMap = new Map<string, StructuralWarning[]>()
+  // Build warning map from topology data (use Set per node to avoid duplicates)
+  const warningMap = new Map<string, Set<StructuralWarning>>()
   if (topology?.has_issues) {
     for (const node of topology.dead_end_nodes) {
-      warningMap.set(node, [...(warningMap.get(node) || []), "dead_end"])
+      if (!warningMap.has(node)) warningMap.set(node, new Set())
+      warningMap.get(node)!.add("dead_end")
     }
     for (const node of topology.unreachable_nodes) {
-      warningMap.set(node, [...(warningMap.get(node) || []), "unreachable"])
+      if (!warningMap.has(node)) warningMap.set(node, new Set())
+      warningMap.get(node)!.add("unreachable")
     }
     for (const cycle of topology.unbounded_cycles) {
       for (const node of cycle) {
-        warningMap.set(node, [...(warningMap.get(node) || []), "unbounded_cycle"])
+        if (!warningMap.has(node)) warningMap.set(node, new Set())
+        warningMap.get(node)!.add("unbounded_cycle")
       }
     }
     for (const node of topology.missing_end_paths) {
-      warningMap.set(node, [...(warningMap.get(node) || []), "no_end_path"])
+      if (!warningMap.has(node)) warningMap.set(node, new Set())
+      warningMap.get(node)!.add("no_end_path")
     }
   }
 
-  const nodes: GraphNode[] = agents.map((a, i) => ({
-    id: a.name,
-    name: a.name,
-    type: agentTypeMap[a.type] || "executor",
-    status: mapAgentStatus(a.status),
-    cost: a.cost,
-    x: 100 + (i % cols) * 340,
-    y: 80 + Math.floor(i / cols) * 200,
-    structuralWarnings: warningMap.get(a.name),
-  }))
+  const nodes: GraphNode[] = agents.map((a, i) => {
+    const ws = warningMap.get(a.name)
+    return {
+      id: a.name,
+      name: a.name,
+      type: agentTypeMap[a.type] || "executor",
+      status: mapAgentStatus(a.status),
+      cost: a.cost,
+      x: 100 + (i % cols) * 340,
+      y: 80 + Math.floor(i / cols) * 200,
+      structuralWarnings: ws ? Array.from(ws) : undefined,
+    }
+  })
 
   const edgeSet = new Set<string>()
   const edges: GraphEdge[] = []

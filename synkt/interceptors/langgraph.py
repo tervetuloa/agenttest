@@ -96,13 +96,22 @@ class LangGraphInterceptor(BaseInterceptor):
                 "missing_end_paths": report["missing_end_paths"],
                 "has_issues": analyzer.has_structural_issues(),
                 "nodes": list(self.graph.nodes.keys()),
-                "edges": (
-                    [(e[0], e[1]) for e in self.graph.edges]
-                    if hasattr(self.graph, "edges")
-                    else []
-                ),
+                "edges": self._normalize_edges(),
             }
             self._collector.record_topology(topology_report)
+
+    def _normalize_edges(self) -> list[tuple[str, str]]:
+        """Return edges as a list of (source, target) 2-tuples, handling dict and iterable forms."""
+        if not hasattr(self.graph, "edges"):
+            return []
+        edges = self.graph.edges
+        if isinstance(edges, dict):
+            return [(src, tgt) for src, tgt in edges.items()]
+        result = []
+        for edge in edges:
+            if isinstance(edge, tuple) and len(edge) >= 2:
+                result.append((edge[0], edge[1]))
+        return result
 
     def _wrap_tools(self) -> None:
         """Wrap tool callables so active mocks can short-circuit execution."""

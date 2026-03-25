@@ -3,7 +3,7 @@
 import { memo, useMemo, useState, useCallback, useRef, useEffect } from "react"
 import { cn } from "@/lib/utils"
 import { RotateCcw, Grid3X3, Maximize2, Search, X } from "lucide-react"
-import { AgentNode, type AgentNodeProps, type StructuralWarning } from "./agent-node"
+import { AgentNode, type AgentNodeProps } from "./agent-node"
 import { AnimatedEdge, type EdgeStatus } from "./animated-edge"
 import { GlassButton } from "./glass-button"
 
@@ -13,7 +13,6 @@ const NODE_HEIGHT = 100 // Approximate rendered height
 export interface GraphNode extends AgentNodeProps {
   x: number
   y: number
-  structuralWarnings?: StructuralWarning[]
 }
 
 export interface GraphEdge {
