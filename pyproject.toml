@@ -21,6 +21,9 @@ dev = [
 langgraph = [
   "langgraph>=0.2",
 ]
+analysis = [
+  "networkx>=3.0",
+]
 server = [
   "fastapi>=0.104.0",
   "uvicorn[standard]>=0.24.0",

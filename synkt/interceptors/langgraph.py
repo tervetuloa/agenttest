@@ -16,9 +16,20 @@ class LangGraphInterceptor(BaseInterceptor):
     The wrapped object is expected to expose:
     - graph.nodes: mapping of node_name -> callable
     - graph.compile().invoke(...): invocation API
+
+    If ``validate_structure=True`` (the default), structural analysis runs at
+    construction time and prints warnings for dead-end nodes, unbounded
+    cycles, unreachable nodes, or missing END paths.
     """
 
-    def __init__(self, graph: Any, *, live: bool = False, server_url: str = "http://localhost:8000"):
+    def __init__(
+        self,
+        graph: Any,
+        *,
+        live: bool = False,
+        server_url: str = "http://localhost:8000",
+        validate_structure: bool = True,
+    ):
         self.graph = graph
         self._original_nodes: dict[str, Callable[..., Any]] = {}
         self._previous_node_name = "start"
@@ -27,8 +38,54 @@ class LangGraphInterceptor(BaseInterceptor):
         if live:
             reset_collector()
             self._collector = get_collector(server_url)
+
+        if validate_structure:
+            self._validate_structure()
+
         self._wrap_tools()
         self._wrap_nodes()
+
+    def _validate_structure(self) -> None:
+        """Run structural analysis and print warnings for any issues found."""
+        try:
+            from synkt.analysis.graph_topology import GraphTopologyAnalyzer
+        except ImportError:
+            return  # networkx not installed — skip silently
+
+        try:
+            analyzer = GraphTopologyAnalyzer(self.graph)
+            report = analyzer.analyze()
+        except Exception:
+            return  # Graph structure not compatible — skip
+
+        if report["dead_end_nodes"]:
+            import sys
+            print(
+                f"\u26a0\ufe0f  synkt warning: Dead-end nodes detected: {report['dead_end_nodes']}",
+                file=sys.stderr,
+            )
+
+        if report["unbounded_cycles"]:
+            import sys
+            print(
+                f"\u26a0\ufe0f  synkt warning: Unbounded cycles detected: {report['unbounded_cycles']}\n"
+                f"   This may cause infinite loops. Consider using assert_graph_valid().",
+                file=sys.stderr,
+            )
+
+        if report["unreachable_nodes"]:
+            import sys
+            print(
+                f"\u26a0\ufe0f  synkt warning: Unreachable nodes (dead code): {report['unreachable_nodes']}",
+                file=sys.stderr,
+            )
+
+        if report["missing_end_paths"]:
+            import sys
+            print(
+                f"\u26a0\ufe0f  synkt warning: Nodes with no path to END: {report['missing_end_paths']}",
+                file=sys.stderr,
+            )
 
     def _wrap_tools(self) -> None:
         """Wrap tool callables so active mocks can short-circuit execution."""

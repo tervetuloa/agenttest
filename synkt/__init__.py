@@ -3,6 +3,7 @@
 __version__ = "0.2.0"
 
 from synkt.assertions.coordination import assert_handoff, assert_parallel_execution
+from synkt.assertions.structural import assert_graph_valid
 from synkt.assertions.system import assert_cost_under, assert_no_loop
 from synkt.assertions.tools import assert_no_tool_called, assert_tool_called
 from synkt.interceptors.autogen import AutoGenInterceptor
@@ -14,6 +15,7 @@ from synkt.trace.pretty import format_trace, print_trace
 from synkt.trace.storage import get_current_trace
 
 __all__ = [
+	"assert_graph_valid",
 	"assert_handoff",
 	"assert_parallel_execution",
 	"assert_tool_called",

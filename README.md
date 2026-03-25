@@ -32,11 +32,60 @@ cd synkt-ui && npm run dev  # dashboard on http://localhost:3000
 
 | Feature | synkt | LangSmith | Braintrust |
 |---------|-------|-----------|------------|
+| Pre-runtime structural analysis | Yes | No | No |
 | Tests coordination | Yes | No | No |
 | Detects infinite loops | Yes | No | No |
+| Predictive cost alerts | Yes | No | No |
 | Real-time graph viz | Yes | No | No |
 | 100% open-source | Yes | No | No |
 | Free forever | Yes | 5K traces | 1M spans |
+
+## Structural Testing
+
+**synkt catches bugs BEFORE your first LLM call.**
+
+Unlike observability tools (LangSmith, Langfuse) that show you what went wrong AFTER execution, synkt validates your graph structure BEFORE any agents run.
+
+### Detect Infinite Loops at Graph Definition Time
+
+```python
+from synkt import assert_graph_valid
+
+def test_graph_structure():
+    graph = build_my_graph()  # LangGraph StateGraph
+
+    # Catches infinite loops, dead-end nodes, unreachable states
+    # BEFORE any LLM calls. Zero cost. Instant feedback.
+    assert_graph_valid(graph)
+```
+
+What it catches:
+- **Unbounded cycles** — A -> B -> A with no exit condition (the $47K bug)
+- **Dead-end nodes** — nodes with no outgoing edges where execution hangs
+- **Unreachable nodes** — dead code that can never execute
+- **Missing END paths** — nodes that can never complete the workflow
+
+### Predictive Cost Alerts
+
+```python
+from synkt import assert_cost_under
+
+def test_cost_stays_reasonable():
+    traced.invoke({"input": "analyze this dataset"})
+
+    # Predict total cost from trajectory, catch overruns EARLY
+    assert_cost_under(5.00, predict=True, max_steps=50)
+```
+
+### Auto-Validation on Interceptor
+
+```python
+from synkt import LangGraphInterceptor
+
+# Automatically warns about structural issues at construction time
+traced = LangGraphInterceptor(graph)
+# ⚠️  synkt warning: Unbounded cycles detected: [['agent_a', 'agent_b']]
+```
 
 ## Usage
 
@@ -112,6 +161,7 @@ result = traced.invoke("Start conversation")
 
 ## Examples
 
+- [Structural Testing](examples/structural_testing/) — Catch bugs before execution
 - [Customer Service](examples/customer_service/) — Sequential agent flow
 - [Research Crew](examples/research_crew/) — Parallel agent execution
 - [Infinite Loop Detection](examples/infinite_loop_demo/) — Catching coordination bugs
@@ -120,7 +170,8 @@ result = traced.invoke("Start conversation")
 
 ```
 synkt/                  # Python testing framework
-├── assertions/         # assert_handoff, assert_no_loop, assert_cost_under
+├── analysis/           # Graph topology analysis (pre-runtime)
+├── assertions/         # assert_graph_valid, assert_handoff, assert_cost_under
 ├── interceptors/       # LangGraph, CrewAI, AutoGen wrappers
 ├── mocking/            # mock_tool, mock_agent
 ├── trace/              # AgentTrace, collector, storage
